@@ -16,19 +16,5 @@ struct MacTMUXApp: App {
                 }
         }
         .menuBarExtraStyle(.menu)
-
-        Window("MacTMUX Sessions", id: "sessions") {
-            SessionsWindowView()
-                .environmentObject(store)
-                .frame(minWidth: 780, minHeight: 480)
-                .task {
-                    await store.refresh()
-                }
-        }
-
-        Settings {
-            SettingsView()
-                .environmentObject(store)
-        }
     }
 }

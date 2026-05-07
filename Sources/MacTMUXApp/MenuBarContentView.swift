@@ -4,8 +4,6 @@ import SwiftUI
 
 struct MenuBarContentView: View {
     @EnvironmentObject private var store: MacTMUXStore
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Group {
@@ -37,7 +35,7 @@ struct MenuBarContentView: View {
             if store.sessions.count > 5 {
                 Divider()
                 Button("Show all sessions...") {
-                    openWindow(id: "sessions")
+                    AppWindowPresenter.shared.showSessions(store: store)
                 }
             }
 
@@ -51,7 +49,7 @@ struct MenuBarContentView: View {
             .disabled(store.isRefreshing)
 
             Button("Settings...") {
-                openSettings()
+                AppWindowPresenter.shared.showSettings(store: store)
             }
 
             Button("Quit MacTMUX") {
