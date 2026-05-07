@@ -100,6 +100,29 @@ final class MacTMUXCoreTests: XCTestCase {
 
         let command = launcher.shellCommand(for: session)
 
-        XCTAssertEqual(command, "'/opt/homebrew/bin/tmux' attach-session -t 'api'\\''; echo bad'")
+        XCTAssertEqual(command, "'/opt/homebrew/bin/tmux' 'attach-session' '-t' 'api'\\''; echo bad'")
+    }
+
+    func testGhosttyCommandUsesOpenWithArguments() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux", socketPath: "/tmp/tmux-501/default")
+        let session = TmuxSession(server: server, name: "api", windows: 1, attached: false, createdAt: .now)
+
+        let command = TerminalLauncher.ghosttyOpenCommand(for: session)
+
+        XCTAssertEqual(command.executable, "/usr/bin/open")
+        XCTAssertEqual(command.arguments.prefix(5), ["-na", "Ghostty.app", "--args", "-e", "/bin/zsh"])
+        XCTAssertEqual(command.arguments.suffix(2), ["-lc", "'/opt/homebrew/bin/tmux' '-S' '/tmp/tmux-501/default' 'attach-session' '-t' 'api'"])
+    }
+
+    func testCmuxCommandCreatesWorkspaceWithEscapedAttachCommand() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "api; echo bad", windows: 1, attached: false, createdAt: .now)
+
+        let command = TerminalLauncher.cmuxNewWorkspaceCommand(for: session, cmuxPath: "/Applications/cmux.app/Contents/Resources/bin/cmux")
+
+        XCTAssertEqual(command.executable, "/Applications/cmux.app/Contents/Resources/bin/cmux")
+        XCTAssertEqual(command.arguments.prefix(4), ["new-workspace", "--name", "MacTMUX api; echo bad", "--cwd"])
+        XCTAssertTrue(command.arguments.contains("--command"))
+        XCTAssertTrue(command.arguments.contains("'/opt/homebrew/bin/tmux' 'attach-session' '-t' 'api; echo bad'"))
     }
 }

@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class MacTMUXStore: ObservableObject {
     @AppStorage("tmuxBinaryPath") private var configuredTmuxPath = ""
+    @AppStorage("terminalKind") private var terminalKindRaw = TerminalKind.terminalApp.rawValue
     @AppStorage("refreshInterval") var refreshInterval = 5.0
 
     @Published private(set) var sessions: [TmuxSession] = []
@@ -15,7 +16,6 @@ final class MacTMUXStore: ObservableObject {
     @Published var errorMessage: String?
 
     private let client = TmuxClient()
-    private let terminalLauncher = TerminalAppLauncher()
     private var refreshLoopStarted = false
 
     init() {
@@ -45,6 +45,15 @@ final class MacTMUXStore: ObservableObject {
         }
         set {
             configuredTmuxPath = newValue
+        }
+    }
+
+    var terminalKind: TerminalKind {
+        get {
+            TerminalKind(rawValue: terminalKindRaw) ?? .terminalApp
+        }
+        set {
+            terminalKindRaw = newValue.rawValue
         }
     }
 
@@ -89,7 +98,7 @@ final class MacTMUXStore: ObservableObject {
 
     func open(_ session: TmuxSession) async {
         do {
-            try await terminalLauncher.open(session: session)
+            try await TerminalLauncher(kind: terminalKind).open(session: session)
             errorMessage = nil
         } catch {
             errorMessage = readableMessage(error)

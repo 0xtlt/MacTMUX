@@ -16,12 +16,18 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: "Terminal") {
-                Picker("Default terminal", selection: .constant("Terminal.app")) {
-                    Text("Terminal.app").tag("Terminal.app")
+                Picker("Default terminal", selection: Binding(
+                    get: { store.terminalKind },
+                    set: { store.terminalKind = $0 }
+                )) {
+                    ForEach(TerminalKind.allCases) { terminal in
+                        Text(terminalLabel(terminal))
+                            .tag(terminal)
+                    }
                 }
-                .disabled(true)
+                .pickerStyle(.menu)
 
-                Text("iTerm2 and Warp adapters are reserved for a later version.")
+                Text(terminalHelp)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -66,6 +72,25 @@ struct SettingsView: View {
         .frame(width: 480)
         .background(Color(nsColor: .windowBackgroundColor))
     }
+
+    private func terminalLabel(_ terminal: TerminalKind) -> String {
+        terminal.isInstalled ? terminal.displayName : "\(terminal.displayName) (not installed)"
+    }
+
+    private var terminalHelp: String {
+        switch store.terminalKind {
+        case .terminalApp:
+            return "Uses Terminal.app AppleScript to open a new tmux attach command."
+        case .iTerm2:
+            return "Uses iTerm2 AppleScript. Install iTerm2 before selecting this."
+        case .warp:
+            return "Creates a MacTMUX launch configuration in ~/.warp/launch_configurations and opens it with Warp."
+        case .ghostty:
+            return "Uses Ghostty app arguments through macOS open."
+        case .cmux:
+            return "Uses cmux CLI new-workspace --command. cmux automation/socket access must allow MacTMUX."
+        }
+    }
 }
 
 private struct SettingsSection<Content: View>: View {
@@ -89,4 +114,5 @@ private struct SettingsSection<Content: View>: View {
             )
         }
     }
+
 }
