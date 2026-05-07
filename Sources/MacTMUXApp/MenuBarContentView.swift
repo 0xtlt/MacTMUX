@@ -136,14 +136,19 @@ private struct MenuSessionRow: View {
             } label: {
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(session.attached ? Color.green : Color.secondary.opacity(0.35))
+                        .fill(Color.green)
                         .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.green.opacity(0.25), lineWidth: 3)
+                        )
+                        .help("Running")
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.name)
                             .font(.system(size: 14, weight: .semibold))
                             .lineLimit(1)
-                        Text("\(session.windows) \(session.windows == 1 ? "window" : "windows") · \(session.createdAt.formatted(date: .omitted, time: .shortened))")
+                        Text("\(session.windows) \(session.windows == 1 ? "window" : "windows") · \(session.attached ? "attached" : "detached") · \(session.createdAt.formatted(date: .omitted, time: .shortened))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
