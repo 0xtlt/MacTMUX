@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+DerivedData/
+MacTMUX.app/
+*.xcuserdata/
+*.swp
