@@ -193,8 +193,6 @@ private struct MenuSessionRow: View {
 
     private var subtitle: String {
         var parts = [
-            "\(session.windows) \(session.windows == 1 ? "window" : "windows")",
-            session.attached ? "attached" : "detached",
             session.createdAt.formatted(date: .omitted, time: .shortened)
         ]
         if let metricsText = store.metricsText(for: session) {
