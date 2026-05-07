@@ -5,8 +5,17 @@ struct SettingsView: View {
     @EnvironmentObject private var store: MacTMUXStore
 
     var body: some View {
-        Form {
-            Section("Terminal") {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Settings")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("MacTMUX")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            SettingsSection(title: "Terminal") {
                 Picker("Default terminal", selection: .constant("Terminal.app")) {
                     Text("Terminal.app").tag("Terminal.app")
                 }
@@ -17,7 +26,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("tmux") {
+            SettingsSection(title: "tmux") {
                 TextField("tmux binary path", text: Binding(
                     get: { store.tmuxPathSetting },
                     set: { store.tmuxPathSetting = $0 }
@@ -36,13 +45,13 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Refresh") {
+            SettingsSection(title: "Refresh") {
                 Stepper(value: $store.refreshInterval, in: 2...60, step: 1) {
                     Text("Refresh interval: \(Int(store.refreshInterval))s")
                 }
             }
 
-            Section("Safety") {
+            SettingsSection(title: "Safety") {
                 Toggle("Always confirm stop and restart", isOn: .constant(true))
                     .disabled(true)
 
@@ -50,9 +59,34 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer(minLength: 0)
         }
-        .formStyle(.grouped)
-        .padding()
+        .padding(20)
         .frame(width: 480)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct SettingsSection<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 10) {
+                content
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.primary.opacity(0.07))
+            )
+        }
     }
 }

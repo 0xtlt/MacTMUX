@@ -15,6 +15,6 @@ struct MacTMUXApp: App {
                     await store.startRefreshLoop()
                 }
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }
