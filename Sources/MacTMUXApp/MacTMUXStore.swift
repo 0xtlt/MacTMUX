@@ -16,6 +16,7 @@ final class MacTMUXStore: ObservableObject {
 
     private let client = TmuxClient()
     private let terminalLauncher = TerminalAppLauncher()
+    private var refreshLoopStarted = false
 
     var compactSessions: [TmuxSession] {
         Array(sessions.prefix(5))
@@ -60,7 +61,7 @@ final class MacTMUXStore: ObservableObject {
         }
 
         do {
-            let server = TmuxServer(binaryPath: tmuxPath)
+            let server = TmuxServer(binaryPath: tmuxPath, socketPath: defaultSocketPath())
             sessions = try await client.listSessions(server: server)
             if let selectedSession, !sessions.contains(where: { $0.id == selectedSession.id }) {
                 self.selectedSession = nil
@@ -131,6 +132,28 @@ final class MacTMUXStore: ObservableObject {
 
     func resetTmuxPathToAutodetect() {
         configuredTmuxPath = ""
+    }
+
+    func startRefreshLoop() async {
+        guard !refreshLoopStarted else {
+            return
+        }
+        refreshLoopStarted = true
+
+        while !Task.isCancelled {
+            let seconds = max(2.0, refreshInterval)
+            try? await Task.sleep(for: .seconds(seconds))
+            await refresh()
+        }
+    }
+
+    private func defaultSocketPath() -> String? {
+        let uid = getuid()
+        let path = "/tmp/tmux-\(uid)/default"
+        guard FileManager.default.fileExists(atPath: path) else {
+            return nil
+        }
+        return path
     }
 
     private func confirm(title: String, message: String) -> Bool {

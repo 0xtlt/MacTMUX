@@ -12,6 +12,7 @@ struct MacTMUXApp: App {
                 .environmentObject(store)
                 .task {
                     await store.refresh()
+                    await store.startRefreshLoop()
                 }
         }
         .menuBarExtraStyle(.menu)

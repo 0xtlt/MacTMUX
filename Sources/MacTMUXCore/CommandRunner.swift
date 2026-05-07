@@ -32,7 +32,7 @@ public struct ProcessCommandRunner: CommandRunning {
     private static func minimalEnvironment() -> [String: String] {
         let environment = ProcessInfo.processInfo.environment
         var result: [String: String] = [:]
-        for key in ["PATH", "HOME", "USER", "SHELL", "TERM", "TMPDIR"] {
+        for key in ["PATH", "HOME", "USER", "SHELL", "TERM"] {
             if let value = environment[key] {
                 result[key] = value
             }
