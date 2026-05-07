@@ -40,6 +40,7 @@ final class AppWindowPresenter {
                 defer: false
             )
             window.title = "MacTMUX Sessions"
+            window.titleVisibility = .hidden
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(
                 rootView: SessionsWindowView()
