@@ -18,6 +18,13 @@ final class MacTMUXStore: ObservableObject {
     private let terminalLauncher = TerminalAppLauncher()
     private var refreshLoopStarted = false
 
+    init() {
+        Task {
+            await refresh()
+            await startRefreshLoop()
+        }
+    }
+
     var compactSessions: [TmuxSession] {
         Array(sessions.prefix(5))
     }
@@ -61,8 +68,7 @@ final class MacTMUXStore: ObservableObject {
         }
 
         do {
-            let server = TmuxServer(binaryPath: tmuxPath, socketPath: defaultSocketPath())
-            sessions = try await client.listSessions(server: server)
+            sessions = try await loadSessions(tmuxPath: tmuxPath)
             if let selectedSession, !sessions.contains(where: { $0.id == selectedSession.id }) {
                 self.selectedSession = nil
                 selectedLogs = ""
@@ -154,6 +160,33 @@ final class MacTMUXStore: ObservableObject {
             return nil
         }
         return path
+    }
+
+    private func candidateServers(tmuxPath: String) -> [TmuxServer] {
+        var servers: [TmuxServer] = []
+        if let socketPath = defaultSocketPath() {
+            servers.append(TmuxServer(binaryPath: tmuxPath, socketPath: socketPath))
+        }
+        servers.append(TmuxServer(binaryPath: tmuxPath))
+        return servers
+    }
+
+    private func loadSessions(tmuxPath: String) async throws -> [TmuxSession] {
+        var lastError: Error?
+        for server in candidateServers(tmuxPath: tmuxPath) {
+            do {
+                let loadedSessions = try await client.listSessions(server: server)
+                if !loadedSessions.isEmpty {
+                    return loadedSessions
+                }
+            } catch {
+                lastError = error
+            }
+        }
+        if let lastError {
+            throw lastError
+        }
+        return []
     }
 
     private func confirm(title: String, message: String) -> Bool {
