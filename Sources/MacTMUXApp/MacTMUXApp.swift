@@ -1,20 +1,23 @@
 import AppKit
-import MacTMUXCore
 import SwiftUI
 
 @main
 struct MacTMUXApp: App {
-    @StateObject private var store = MacTMUXStore()
+    @NSApplicationDelegateAdaptor(MacTMUXAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("MacTMUX", systemImage: "terminal") {
-            MenuBarContentView()
-                .environmentObject(store)
-                .task {
-                    await store.refresh()
-                    await store.startRefreshLoop()
-                }
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
+    }
+}
+
+@MainActor
+final class MacTMUXAppDelegate: NSObject, NSApplicationDelegate {
+    private let store = MacTMUXStore()
+    private var statusBarController: StatusBarController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusBarController = StatusBarController(store: store)
     }
 }
