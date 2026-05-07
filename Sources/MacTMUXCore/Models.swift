@@ -18,6 +18,7 @@ public struct TmuxSession: Identifiable, Hashable, Codable, Sendable {
     public var windows: Int
     public var attached: Bool
     public var createdAt: Date
+    public var activePanePID: Int32?
 
     public var id: String {
         [
@@ -28,12 +29,38 @@ public struct TmuxSession: Identifiable, Hashable, Codable, Sendable {
         ].joined(separator: "\u{1F}")
     }
 
-    public init(server: TmuxServer, name: String, windows: Int, attached: Bool, createdAt: Date) {
+    public init(server: TmuxServer, name: String, windows: Int, attached: Bool, createdAt: Date, activePanePID: Int32? = nil) {
         self.server = server
         self.name = name
         self.windows = windows
         self.attached = attached
         self.createdAt = createdAt
+        self.activePanePID = activePanePID
+    }
+}
+
+public struct ProcessResourceMetrics: Equatable, Codable, Sendable {
+    public var cpuPercent: Double
+    public var residentMemoryBytes: Int64
+
+    public init(cpuPercent: Double, residentMemoryBytes: Int64) {
+        self.cpuPercent = cpuPercent
+        self.residentMemoryBytes = residentMemoryBytes
+    }
+
+    public var formattedCPU: String {
+        if cpuPercent < 10 {
+            return String(format: "%.1f%%", cpuPercent)
+        }
+        return String(format: "%.0f%%", cpuPercent)
+    }
+
+    public var formattedMemory: String {
+        let megabytes = Double(residentMemoryBytes) / 1_048_576
+        if megabytes < 1024 {
+            return "\(Int(megabytes.rounded())) MB"
+        }
+        return String(format: "%.1f GB", megabytes / 1024)
     }
 }
 

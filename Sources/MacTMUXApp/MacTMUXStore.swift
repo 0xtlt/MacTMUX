@@ -7,8 +7,10 @@ final class MacTMUXStore: ObservableObject {
     @AppStorage("tmuxBinaryPath") private var configuredTmuxPath = ""
     @AppStorage("terminalKind") private var terminalKindRaw = TerminalKind.terminalApp.rawValue
     @AppStorage("refreshInterval") var refreshInterval = 5.0
+    @AppStorage("showResourceMetrics") private var showResourceMetricsRaw = true
 
     @Published private(set) var sessions: [TmuxSession] = []
+    @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
     @Published private(set) var selectedSession: TmuxSession?
     @Published private(set) var selectedLogs = ""
     @Published private(set) var isRefreshing = false
@@ -16,6 +18,7 @@ final class MacTMUXStore: ObservableObject {
     @Published var errorMessage: String?
 
     private let client = TmuxClient()
+    private let metricsClient = ProcessMetricsClient()
     private var refreshLoopStarted = false
 
     init() {
@@ -57,6 +60,22 @@ final class MacTMUXStore: ObservableObject {
         }
     }
 
+    var showResourceMetrics: Bool {
+        get {
+            showResourceMetricsRaw
+        }
+        set {
+            showResourceMetricsRaw = newValue
+            if !newValue {
+                resourceMetricsBySessionID = [:]
+            } else {
+                Task {
+                    await refresh()
+                }
+            }
+        }
+    }
+
     func refresh() async {
         guard !isRefreshing else {
             DiagnosticLog.write("refresh skipped already refreshing")
@@ -84,7 +103,9 @@ final class MacTMUXStore: ObservableObject {
         }
 
         do {
-            sessions = try await loadSessions(tmuxPath: tmuxPath)
+            let loadedSessions = try await loadSessions(tmuxPath: tmuxPath)
+            sessions = loadedSessions
+            await loadResourceMetricsIfNeeded(for: loadedSessions)
             if let selectedSession, !sessions.contains(where: { $0.id == selectedSession.id }) {
                 self.selectedSession = nil
                 selectedLogs = ""
@@ -156,6 +177,13 @@ final class MacTMUXStore: ObservableObject {
         configuredTmuxPath = ""
     }
 
+    func metricsText(for session: TmuxSession) -> String? {
+        guard showResourceMetrics, let metrics = resourceMetricsBySessionID[session.id] else {
+            return nil
+        }
+        return "CPU \(metrics.formattedCPU) · RAM \(metrics.formattedMemory)"
+    }
+
     func startRefreshLoop() async {
         guard !refreshLoopStarted else {
             DiagnosticLog.write("refresh loop already started")
@@ -212,6 +240,39 @@ final class MacTMUXStore: ObservableObject {
             throw lastError
         }
         return []
+    }
+
+    private func loadResourceMetricsIfNeeded(for sessions: [TmuxSession]) async {
+        guard showResourceMetrics else {
+            resourceMetricsBySessionID = [:]
+            return
+        }
+
+        let pidPairs = sessions.compactMap { session -> (String, Int32)? in
+            guard let activePanePID = session.activePanePID else {
+                return nil
+            }
+            return (session.id, activePanePID)
+        }
+
+        guard !pidPairs.isEmpty else {
+            resourceMetricsBySessionID = [:]
+            return
+        }
+
+        do {
+            let metricsByPID = try await metricsClient.metrics(forRootPIDs: pidPairs.map(\.1))
+            resourceMetricsBySessionID = Dictionary(uniqueKeysWithValues: pidPairs.compactMap { sessionID, pid in
+                guard let metrics = metricsByPID[pid] else {
+                    return nil
+                }
+                return (sessionID, metrics)
+            })
+            DiagnosticLog.write("metrics loaded count=\(resourceMetricsBySessionID.count)")
+        } catch {
+            resourceMetricsBySessionID = [:]
+            DiagnosticLog.write("metrics failed error=\(readableMessage(error))")
+        }
     }
 
     private func confirm(title: String, message: String) -> Bool {

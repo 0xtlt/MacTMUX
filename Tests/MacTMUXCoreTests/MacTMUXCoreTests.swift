@@ -20,6 +20,17 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertFalse(sessions[1].attached)
     }
 
+    func testParsesFormattedTmuxSessionsWithActivePanePID() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let output = "api:::MACTMUX:::2:::MACTMUX:::1:::MACTMUX:::1778164371:::MACTMUX:::45520\n"
+
+        let sessions = TmuxOutputParser.parseSessions(output, server: server)
+
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions[0].name, "api")
+        XCTAssertEqual(sessions[0].activePanePID, 45520)
+    }
+
     func testParsesLegacyUnitSeparatorTmuxSessions() {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let output = "api\u{1F}2\u{1F}1\u{1F}1778164371\n"
@@ -91,6 +102,34 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertFalse(output.contains("sk-abcdefghijklmnopqrstuvwxyz123456"))
         XCTAssertFalse(output.contains("AKIA1234567890ABCDEF"))
         XCTAssertTrue(output.contains("password: [REDACTED]"))
+    }
+
+    func testParsesProcessRecords() {
+        let output = """
+          100     1   0.0   1200
+          101   100  12.5  20480
+        """
+
+        let records = ProcessMetricsClient.parseProcessRecords(output)
+
+        XCTAssertEqual(records, [
+            ProcessRecord(pid: 100, parentPID: 1, cpuPercent: 0.0, residentMemoryKilobytes: 1200),
+            ProcessRecord(pid: 101, parentPID: 100, cpuPercent: 12.5, residentMemoryKilobytes: 20480)
+        ])
+    }
+
+    func testAggregatesProcessMetricsForRootAndDescendants() {
+        let records = [
+            ProcessRecord(pid: 100, parentPID: 1, cpuPercent: 1.0, residentMemoryKilobytes: 1_000),
+            ProcessRecord(pid: 101, parentPID: 100, cpuPercent: 2.5, residentMemoryKilobytes: 2_000),
+            ProcessRecord(pid: 102, parentPID: 101, cpuPercent: 3.0, residentMemoryKilobytes: 3_000),
+            ProcessRecord(pid: 200, parentPID: 1, cpuPercent: 99.0, residentMemoryKilobytes: 99_000)
+        ]
+
+        let metrics = ProcessMetricsClient.aggregate(records: records, rootPIDs: [100])
+
+        XCTAssertEqual(metrics[100]?.cpuPercent, 6.5)
+        XCTAssertEqual(metrics[100]?.residentMemoryBytes, 6_000 * 1024)
     }
 
     func testTerminalCommandEscapesSessionName() {

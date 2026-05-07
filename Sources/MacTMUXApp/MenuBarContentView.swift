@@ -148,7 +148,7 @@ private struct MenuSessionRow: View {
                         Text(session.name)
                             .font(.system(size: 14, weight: .semibold))
                             .lineLimit(1)
-                        Text("\(session.windows) \(session.windows == 1 ? "window" : "windows") · \(session.attached ? "attached" : "detached") · \(session.createdAt.formatted(date: .omitted, time: .shortened))")
+                        Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -188,6 +188,18 @@ private struct MenuSessionRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.primary.opacity(0.07))
-        )
+            )
+    }
+
+    private var subtitle: String {
+        var parts = [
+            "\(session.windows) \(session.windows == 1 ? "window" : "windows")",
+            session.attached ? "attached" : "detached",
+            session.createdAt.formatted(date: .omitted, time: .shortened)
+        ]
+        if let metricsText = store.metricsText(for: session) {
+            parts.append(metricsText)
+        }
+        return parts.joined(separator: " · ")
     }
 }

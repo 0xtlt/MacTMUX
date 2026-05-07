@@ -9,7 +9,7 @@ public enum TmuxOutputParser {
             .compactMap { line -> TmuxSession? in
                 let line = String(line)
                 let parts = splitFields(line)
-                guard parts.count == 4 else {
+                guard parts.count == 4 || parts.count == 5 else {
                     DiagnosticLog.write("parse skipped parts=\(parts.count) lineBytes=\(line.utf8.count)")
                     return nil
                 }
@@ -17,12 +17,14 @@ public enum TmuxOutputParser {
                 let windows = Int(parts[1]) ?? 0
                 let attached = parts[2] == "1"
                 let timestamp = TimeInterval(parts[3]) ?? 0
+                let panePID = parts.count == 5 ? Int32(parts[4]) : nil
                 return TmuxSession(
                     server: server,
                     name: name,
                     windows: windows,
                     attached: attached,
-                    createdAt: Date(timeIntervalSince1970: timestamp)
+                    createdAt: Date(timeIntervalSince1970: timestamp),
+                    activePanePID: panePID
                 )
             }
     }
@@ -39,12 +41,12 @@ public enum TmuxOutputParser {
     private static func splitFields(_ line: String) -> [String] {
         for separator in separators {
             let parts = line.components(separatedBy: separator)
-            if parts.count == 4 {
+            if parts.count == 4 || parts.count == 5 {
                 return parts
             }
         }
         let whitespaceParts = line.split(whereSeparator: \.isWhitespace).map(String.init)
-        if whitespaceParts.count == 4 {
+        if whitespaceParts.count == 4 || whitespaceParts.count == 5 {
             return whitespaceParts
         }
         return [line]

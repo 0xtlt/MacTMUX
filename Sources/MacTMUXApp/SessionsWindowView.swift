@@ -78,6 +78,7 @@ struct SessionsWindowView: View {
 }
 
 private struct SessionRow: View {
+    @EnvironmentObject private var store: MacTMUXStore
     var session: TmuxSession
 
     var body: some View {
@@ -92,12 +93,23 @@ private struct SessionRow: View {
                 }
             }
 
-            Text("\(session.windows) windows · created \(session.createdAt.formatted(date: .abbreviated, time: .shortened))")
+            Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .padding(.vertical, 4)
+    }
+
+    private var subtitle: String {
+        var parts = [
+            "\(session.windows) windows",
+            "created \(session.createdAt.formatted(date: .abbreviated, time: .shortened))"
+        ]
+        if let metricsText = store.metricsText(for: session) {
+            parts.append(metricsText)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -114,6 +126,11 @@ private struct SessionDetailView: View {
                         .fontWeight(.semibold)
                     Text("\(session.windows) windows · \(session.attached ? "attached" : "detached")")
                         .foregroundStyle(.secondary)
+                    if let metricsText = store.metricsText(for: session) {
+                        Text(metricsText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer()

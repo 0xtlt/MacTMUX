@@ -55,6 +55,15 @@ struct SettingsView: View {
                 Stepper(value: $store.refreshInterval, in: 2...60, step: 1) {
                     Text("Refresh interval: \(Int(store.refreshInterval))s")
                 }
+
+                Toggle("Show CPU and RAM", isOn: Binding(
+                    get: { store.showResourceMetrics },
+                    set: { store.showResourceMetrics = $0 }
+                ))
+
+                Text("When enabled, MacTMUX runs one lightweight ps sample per refresh and sums each tmux pane process with its child processes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             SettingsSection(title: "Safety") {

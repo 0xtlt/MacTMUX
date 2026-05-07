@@ -17,7 +17,7 @@ public enum TmuxCommands {
             arguments: serverArguments(for: server) + [
                 "list-sessions",
                 "-F",
-                "#{session_name}:::MACTMUX:::#{session_windows}:::MACTMUX:::#{session_attached}:::MACTMUX:::#{session_created}"
+                "#{session_name}:::MACTMUX:::#{session_windows}:::MACTMUX:::#{session_attached}:::MACTMUX:::#{session_created}:::MACTMUX:::#{pane_pid}"
             ]
         )
     }
