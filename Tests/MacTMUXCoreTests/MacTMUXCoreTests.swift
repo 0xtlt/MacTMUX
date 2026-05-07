@@ -6,8 +6,8 @@ final class MacTMUXCoreTests: XCTestCase {
     func testParsesFormattedTmuxSessions() {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let output = """
-        api\u{1F}2\u{1F}1\u{1F}1778164371
-        worker\u{1F}1\u{1F}0\u{1F}1778164380
+        api:::MACTMUX:::2:::MACTMUX:::1:::MACTMUX:::1778164371
+        worker:::MACTMUX:::1:::MACTMUX:::0:::MACTMUX:::1778164380
         """
 
         let sessions = TmuxOutputParser.parseSessions(output, server: server)
@@ -18,6 +18,16 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertTrue(sessions[0].attached)
         XCTAssertEqual(sessions[1].name, "worker")
         XCTAssertFalse(sessions[1].attached)
+    }
+
+    func testParsesLegacyUnitSeparatorTmuxSessions() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let output = "api\u{1F}2\u{1F}1\u{1F}1778164371\n"
+
+        let sessions = TmuxOutputParser.parseSessions(output, server: server)
+
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions[0].name, "api")
     }
 
     func testSortsSessionsByCreationDateDescendingWithNameFallback() {

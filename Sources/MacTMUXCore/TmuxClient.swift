@@ -11,11 +11,14 @@ public actor TmuxClient {
         let result = try await runner.run(TmuxCommands.listSessions(server: server))
         if result.exitCode != 0 {
             if result.stderr.localizedCaseInsensitiveContains("no server running") {
+                DiagnosticLog.write("listSessions no server server=\(server)")
                 return []
             }
             throw MacTMUXError.commandFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        return TmuxOutputParser.sortNewestFirst(TmuxOutputParser.parseSessions(result.stdout, server: server))
+        let parsedSessions = TmuxOutputParser.parseSessions(result.stdout, server: server)
+        DiagnosticLog.write("listSessions parsed=\(parsedSessions.count) names=\(parsedSessions.map(\.name).joined(separator: ",")) server=\(server)")
+        return TmuxOutputParser.sortNewestFirst(parsedSessions)
     }
 
     public func captureLogs(session: TmuxSession) async throws -> String {
@@ -23,6 +26,7 @@ public actor TmuxClient {
         if result.exitCode != 0 {
             throw MacTMUXError.commandFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        DiagnosticLog.write("captureLogs session=\(session.name) bytes=\(result.stdout.utf8.count)")
         return SecretRedactor.redact(result.stdout)
     }
 

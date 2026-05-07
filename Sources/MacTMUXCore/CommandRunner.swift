@@ -9,6 +9,7 @@ public struct ProcessCommandRunner: CommandRunning {
 
     public func run(_ command: CommandSpec) async throws -> CommandResult {
         try await Task.detached(priority: .userInitiated) {
+            DiagnosticLog.write("run executable=\(command.executable) args=\(Self.safeArguments(command.arguments))")
             let process = Process()
             process.executableURL = URL(fileURLWithPath: command.executable)
             process.arguments = command.arguments
@@ -25,6 +26,7 @@ public struct ProcessCommandRunner: CommandRunning {
             let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
 
+            DiagnosticLog.write("exit=\(process.terminationStatus) stdoutBytes=\(stdout.utf8.count) stderr=\(Self.trim(stderr))")
             return CommandResult(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
         }.value
     }
@@ -44,5 +46,22 @@ public struct ProcessCommandRunner: CommandRunning {
             result["TERM"] = "xterm-256color"
         }
         return result
+    }
+
+    private static func safeArguments(_ arguments: [String]) -> String {
+        arguments.map { argument in
+            if argument == "capture-pane" {
+                return argument
+            }
+            return argument.replacingOccurrences(of: "\n", with: "\\n")
+        }.joined(separator: " ")
+    }
+
+    private static func trim(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 300 {
+            return trimmed
+        }
+        return String(trimmed.prefix(300)) + "...[truncated]"
     }
 }

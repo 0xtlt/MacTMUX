@@ -19,6 +19,8 @@ final class MacTMUXStore: ObservableObject {
     private var refreshLoopStarted = false
 
     init() {
+        DiagnosticLog.clear()
+        DiagnosticLog.write("store init")
         Task {
             await refresh()
             await startRefreshLoop()
@@ -48,22 +50,27 @@ final class MacTMUXStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else {
+            DiagnosticLog.write("refresh skipped already refreshing")
             return
         }
         isRefreshing = true
+        DiagnosticLog.write("refresh start configuredTmuxPath=\(configuredTmuxPath)")
         defer {
             isRefreshing = false
+            DiagnosticLog.write("refresh end sessions=\(sessions.count) error=\(errorMessage ?? "nil")")
         }
 
         guard let tmuxPath else {
             sessions = []
             errorMessage = MacTMUXError.tmuxNotFound.localizedDescription
+            DiagnosticLog.write("tmux path not found")
             return
         }
 
         guard TmuxPathResolver.isValidTmuxBinary(tmuxPath) else {
             sessions = []
             errorMessage = MacTMUXError.invalidTmuxPath(tmuxPath).localizedDescription
+            DiagnosticLog.write("invalid tmux path \(tmuxPath)")
             return
         }
 
@@ -142,9 +149,11 @@ final class MacTMUXStore: ObservableObject {
 
     func startRefreshLoop() async {
         guard !refreshLoopStarted else {
+            DiagnosticLog.write("refresh loop already started")
             return
         }
         refreshLoopStarted = true
+        DiagnosticLog.write("refresh loop started interval=\(refreshInterval)")
 
         while !Task.isCancelled {
             let seconds = max(2.0, refreshInterval)
@@ -157,8 +166,10 @@ final class MacTMUXStore: ObservableObject {
         let uid = getuid()
         let path = "/tmp/tmux-\(uid)/default"
         guard FileManager.default.fileExists(atPath: path) else {
+            DiagnosticLog.write("default socket missing path=\(path)")
             return nil
         }
+        DiagnosticLog.write("default socket found path=\(path)")
         return path
     }
 
@@ -168,6 +179,7 @@ final class MacTMUXStore: ObservableObject {
             servers.append(TmuxServer(binaryPath: tmuxPath, socketPath: socketPath))
         }
         servers.append(TmuxServer(binaryPath: tmuxPath))
+        DiagnosticLog.write("candidate servers count=\(servers.count) values=\(servers)")
         return servers
     }
 
@@ -175,12 +187,16 @@ final class MacTMUXStore: ObservableObject {
         var lastError: Error?
         for server in candidateServers(tmuxPath: tmuxPath) {
             do {
+                DiagnosticLog.write("load sessions trying server=\(server)")
                 let loadedSessions = try await client.listSessions(server: server)
                 if !loadedSessions.isEmpty {
+                    DiagnosticLog.write("load sessions success count=\(loadedSessions.count) server=\(server)")
                     return loadedSessions
                 }
+                DiagnosticLog.write("load sessions empty server=\(server)")
             } catch {
                 lastError = error
+                DiagnosticLog.write("load sessions failed server=\(server) error=\(readableMessage(error))")
             }
         }
         if let lastError {
