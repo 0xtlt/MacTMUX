@@ -181,6 +181,63 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(buffer.lines.map(\.text), ["new", "logs"])
     }
 
+    func testLogBufferCapsRetainedLinesAfterAppend() {
+        var buffer = LogBuffer(pageSize: 3, maxRetainedLines: 5)
+        _ = buffer.reset(with: "a\nb\nc\n")
+
+        let result = buffer.appendLatest("b\nc\nd\ne\nf\ng\n")
+
+        XCTAssertEqual(result.insertedCount, 4)
+        XCTAssertEqual(buffer.lines.map(\.text), ["c", "d", "e", "f", "g"])
+        XCTAssertLessThanOrEqual(buffer.lines.count, 5)
+    }
+
+    func testLogBufferCapsRetainedLinesAfterPrepend() {
+        var buffer = LogBuffer(pageSize: 4, maxRetainedLines: 5)
+        _ = buffer.reset(with: "c\nd\ne\n")
+
+        let result = buffer.prependOlder("0\na\nb\nc\n")
+
+        XCTAssertEqual(result.insertedCount, 3)
+        XCTAssertEqual(buffer.lines.map(\.text), ["0", "a", "b", "c", "d"])
+        XCTAssertLessThanOrEqual(buffer.lines.count, 5)
+    }
+
+    func testDiagnosticLogDisabledDoesNotCreateFile() {
+        let tempFile = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mactmux-test-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: tempFile)
+        }
+
+        DiagnosticLog.write("secret-session", environment: [:], path: tempFile.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tempFile.path))
+    }
+
+    func testProcessCommandRunnerReadsLargeStdoutAndStderrWithoutDeadlock() async throws {
+        let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+
+        let script = tempDirectory.appendingPathComponent("large-output.sh")
+        let body = """
+        #!/bin/sh
+        yes o | head -c 200000
+        yes e | head -c 200000 1>&2
+        """
+        try body.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let result = try await ProcessCommandRunner().run(CommandSpec(executable: script.path, arguments: []))
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout.count, 200_000)
+        XCTAssertEqual(result.stderr.count, 200_000)
+    }
+
     func testTerminalCommandEscapesSessionName() {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let session = TmuxSession(server: server, name: "api'; echo bad", windows: 1, attached: false, createdAt: .now)

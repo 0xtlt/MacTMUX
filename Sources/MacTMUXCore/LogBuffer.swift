@@ -42,28 +42,31 @@ public struct LogBuffer: Equatable, Sendable {
     public private(set) var loadedBacklogLines: Int
     public private(set) var hasMoreOlderLogs: Bool
     public let pageSize: Int
+    public let maxRetainedLines: Int
 
     private var nextAppendSequence: Int
     private var nextPrependSequence: Int
 
-    public init(pageSize: Int = 200) {
+    public init(pageSize: Int = 200, maxRetainedLines: Int = 2_000) {
         self.lines = []
         self.loadedBacklogLines = 0
         self.hasMoreOlderLogs = true
         self.pageSize = pageSize
+        self.maxRetainedLines = max(1, maxRetainedLines)
         self.nextAppendSequence = 0
         self.nextPrependSequence = -1
     }
 
     public mutating func reset(with capturedOutput: String) -> LogMergeResult {
         let rawLines = Self.normalizedLines(from: capturedOutput)
-        lines = rawLines.enumerated().map { index, text in
-            Self.makeLine(text: text, sequence: index)
+        let retainedLines = Self.suffix(rawLines, maxCount: maxRetainedLines)
+        let startSequence = rawLines.count - retainedLines.count
+        lines = retainedLines.enumerated().map { index, text in
+            Self.makeLine(text: text, sequence: startSequence + index)
         }
         loadedBacklogLines = pageSize
         hasMoreOlderLogs = rawLines.count >= pageSize
-        nextAppendSequence = lines.last.map { $0.sequence + 1 } ?? 0
-        nextPrependSequence = lines.first.map { $0.sequence - 1 } ?? -1
+        resetSequenceCursors()
         return LogMergeResult(insertedCount: lines.count, replaced: true)
     }
 
@@ -94,6 +97,8 @@ public struct LogBuffer: Equatable, Sendable {
             return line
         }
         lines.append(contentsOf: newLines)
+        loadedBacklogLines += newLines.count
+        trimAfterAppend()
         return LogMergeResult(insertedCount: newLines.count)
     }
 
@@ -120,6 +125,7 @@ public struct LogBuffer: Equatable, Sendable {
         lines.insert(contentsOf: olderLines, at: 0)
         loadedBacklogLines += pageSize
         hasMoreOlderLogs = rawLines.count >= pageSize
+        trimAfterPrepend()
         return LogMergeResult(insertedCount: olderLines.count)
     }
 
@@ -175,6 +181,41 @@ public struct LogBuffer: Equatable, Sendable {
             level: classify(text),
             sequence: sequence
         )
+    }
+
+    private mutating func trimAfterAppend() {
+        let overflow = lines.count - maxRetainedLines
+        guard overflow > 0 else {
+            resetSequenceCursors()
+            return
+        }
+
+        lines.removeFirst(overflow)
+        loadedBacklogLines = max(pageSize, loadedBacklogLines - overflow)
+        resetSequenceCursors()
+    }
+
+    private mutating func trimAfterPrepend() {
+        let overflow = lines.count - maxRetainedLines
+        guard overflow > 0 else {
+            resetSequenceCursors()
+            return
+        }
+
+        lines.removeLast(overflow)
+        resetSequenceCursors()
+    }
+
+    private mutating func resetSequenceCursors() {
+        nextAppendSequence = lines.last.map { $0.sequence + 1 } ?? 0
+        nextPrependSequence = lines.first.map { $0.sequence - 1 } ?? -1
+    }
+
+    private static func suffix(_ lines: [String], maxCount: Int) -> [String] {
+        guard lines.count > maxCount else {
+            return lines
+        }
+        return Array(lines.suffix(maxCount))
     }
 
     private static func overlap(suffixOf left: [String], prefixOf right: [String]) -> Int {

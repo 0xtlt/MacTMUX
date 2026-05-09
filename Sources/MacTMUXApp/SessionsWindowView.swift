@@ -397,7 +397,7 @@ private struct LogOutputView: View {
     }
 
     private var emptyState: some View {
-        Text(store.isLoadingInitialLogs ? "Loading logs..." : "No logs captured yet")
+        Text(store.isLoadingSelectedInitialLogs ? "Loading logs..." : "No logs captured yet")
             .font(.system(.body, design: .monospaced))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
@@ -439,9 +439,16 @@ private struct LogOutputView: View {
     }
 
     private func scrollToBottomAfterLayout(proxy: ScrollViewProxy) {
+        guard !store.logLines.isEmpty else {
+            return
+        }
+
         Task {
             await Task.yield()
             await MainActor.run {
+                guard !store.logLines.isEmpty else {
+                    return
+                }
                 scrollToBottom(proxy: proxy, animated: false)
                 didInitialBottomScroll = true
                 isAtBottom = true

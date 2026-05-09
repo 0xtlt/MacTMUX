@@ -2,6 +2,21 @@ import AppKit
 import MacTMUXCore
 import SwiftUI
 
+protocol TmuxClientProviding: Sendable {
+    func listSessions(server: TmuxServer) async throws -> [TmuxSession]
+    func captureLogs(session: TmuxSession, startLine: Int, endLine: Int) async throws -> String
+    func stop(session: TmuxSession) async throws
+    func restartActivePane(session: TmuxSession) async throws
+}
+
+extension TmuxClient: TmuxClientProviding {}
+
+protocol ProcessMetricsProviding: Sendable {
+    func metrics(forRootPIDs rootPIDs: [Int32]) async throws -> [Int32: ProcessResourceMetrics]
+}
+
+extension ProcessMetricsClient: ProcessMetricsProviding {}
+
 @MainActor
 final class MacTMUXStore: ObservableObject {
     @AppStorage("tmuxBinaryPath") private var configuredTmuxPath = ""
@@ -21,22 +36,34 @@ final class MacTMUXStore: ObservableObject {
     @Published private(set) var isLoadingOlderLogs = false
     @Published var errorMessage: String?
 
-    private let client = TmuxClient()
-    private let metricsClient = ProcessMetricsClient()
+    private let client: any TmuxClientProviding
+    private let metricsClient: any ProcessMetricsProviding
     private var refreshLoopStarted = false
     private var logRefreshLoopStarted = false
+    private var loadingInitialLogSessionIDs = Set<String>()
 
-    init() {
+    init(
+        client: any TmuxClientProviding = TmuxClient(),
+        metricsClient: any ProcessMetricsProviding = ProcessMetricsClient(),
+        refreshOnInit: Bool = true,
+        startBackgroundTasks: Bool = true
+    ) {
+        self.client = client
+        self.metricsClient = metricsClient
         DiagnosticLog.clear()
         DiagnosticLog.write("store init")
-        Task {
-            await refresh()
+        if refreshOnInit {
+            Task {
+                await refresh()
+            }
         }
-        Task {
-            await startRefreshLoop()
-        }
-        Task {
-            await startLogRefreshLoop()
+        if startBackgroundTasks {
+            Task {
+                await startRefreshLoop()
+            }
+            Task {
+                await startLogRefreshLoop()
+            }
         }
     }
 
@@ -49,11 +76,18 @@ final class MacTMUXStore: ObservableObject {
     }
 
     var canLoadOlderLogs: Bool {
-        logBuffer.hasMoreOlderLogs && !isLoadingInitialLogs && !isRefreshingLogs && !isLoadingOlderLogs
+        logBuffer.hasMoreOlderLogs && !isLoadingSelectedInitialLogs && !isRefreshingLogs && !isLoadingOlderLogs
     }
 
     var isLoadingLogs: Bool {
-        isLoadingInitialLogs || isRefreshingLogs || isLoadingOlderLogs
+        isLoadingSelectedInitialLogs || isRefreshingLogs || isLoadingOlderLogs
+    }
+
+    var isLoadingSelectedInitialLogs: Bool {
+        guard let selectedSession else {
+            return false
+        }
+        return loadingInitialLogSessionIDs.contains(selectedSession.id)
     }
 
     var tmuxPath: String? {
@@ -170,17 +204,17 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func loadInitialLogs(for session: TmuxSession) async {
-        guard !isLoadingInitialLogs else {
+        guard !isLoadingInitialLogs(for: session) else {
             return
         }
-        isLoadingInitialLogs = true
+        setInitialLogLoading(true, for: session.id)
         defer {
-            isLoadingInitialLogs = false
+            setInitialLogLoading(false, for: session.id)
         }
 
         do {
             let output = try await client.captureLogs(session: session, startLine: -logBuffer.pageSize, endLine: -1)
-            var nextBuffer = LogBuffer(pageSize: logBuffer.pageSize)
+            var nextBuffer = LogBuffer(pageSize: logBuffer.pageSize, maxRetainedLines: logBuffer.maxRetainedLines)
             _ = nextBuffer.reset(with: output)
             guard selectedSession?.id == session.id else {
                 return
@@ -189,13 +223,16 @@ final class MacTMUXStore: ObservableObject {
             logRevision += 1
             errorMessage = nil
         } catch {
+            guard selectedSession?.id == session.id else {
+                return
+            }
             clearLogs()
             errorMessage = readableMessage(error)
         }
     }
 
     func refreshLatestLogs(for session: TmuxSession) async {
-        guard !isLoadingInitialLogs, !isRefreshingLogs, selectedSession?.id == session.id else {
+        guard !isLoadingInitialLogs(for: session), !isRefreshingLogs, selectedSession?.id == session.id else {
             return
         }
         isRefreshingLogs = true
@@ -471,6 +508,19 @@ final class MacTMUXStore: ObservableObject {
         let remainingCount = failures.count - 3
         let remainingText = remainingCount > 0 ? "\nand \(remainingCount) more." : ""
         return "Failed to stop \(failures.count) session\(failures.count == 1 ? "" : "s"):\n\(shownFailures)\(remainingText)"
+    }
+
+    private func isLoadingInitialLogs(for session: TmuxSession) -> Bool {
+        loadingInitialLogSessionIDs.contains(session.id)
+    }
+
+    private func setInitialLogLoading(_ loading: Bool, for sessionID: String) {
+        if loading {
+            loadingInitialLogSessionIDs.insert(sessionID)
+        } else {
+            loadingInitialLogSessionIDs.remove(sessionID)
+        }
+        isLoadingInitialLogs = !loadingInitialLogSessionIDs.isEmpty
     }
 
     private func clearLogs() {

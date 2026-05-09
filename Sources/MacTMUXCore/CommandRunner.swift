@@ -19,15 +19,30 @@ public struct ProcessCommandRunner: CommandRunning {
             let stderrPipe = Pipe()
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
+            let stdoutHandle = stdoutPipe.fileHandleForReading
+            let stderrHandle = stderrPipe.fileHandleForReading
+            defer {
+                try? stdoutHandle.close()
+                try? stderrHandle.close()
+            }
 
             try process.run()
+            async let stdoutData = Self.readData(from: stdoutHandle)
+            async let stderrData = Self.readData(from: stderrHandle)
             process.waitUntilExit()
 
-            let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let (stdoutBytes, stderrBytes) = await (stdoutData, stderrData)
+            let stdout = String(data: stdoutBytes, encoding: .utf8) ?? ""
+            let stderr = String(data: stderrBytes, encoding: .utf8) ?? ""
 
             DiagnosticLog.write("exit=\(process.terminationStatus) stdoutBytes=\(stdout.utf8.count) stderr=\(Self.trim(stderr))")
             return CommandResult(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
+        }.value
+    }
+
+    private static func readData(from handle: FileHandle) async -> Data {
+        await Task.detached(priority: .userInitiated) {
+            handle.readDataToEndOfFile()
         }.value
     }
 

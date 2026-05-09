@@ -22,6 +22,10 @@ let package = Package(
         .testTarget(
             name: "MacTMUXCoreTests",
             dependencies: ["MacTMUXCore"]
+        ),
+        .testTarget(
+            name: "MacTMUXAppTests",
+            dependencies: ["MacTMUXApp", "MacTMUXCore"]
         )
     ]
 )
