@@ -248,6 +248,7 @@ private struct LogOutputView: View {
 
     @State private var isAtBottom = true
     @State private var pendingTopAnchorID: String?
+    @State private var didInitialBottomScroll = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -273,10 +274,15 @@ private struct LogOutputView: View {
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .onAppear {
-                scrollToBottom(proxy: proxy, animated: false)
+                didInitialBottomScroll = false
+                scrollToBottomAfterLayout(proxy: proxy)
             }
             .onChange(of: store.logRevision) { _, _ in
                 handleLogRevisionChange(proxy: proxy)
+            }
+            .onChange(of: session.id) { _, _ in
+                didInitialBottomScroll = false
+                scrollToBottomAfterLayout(proxy: proxy)
             }
         }
     }
@@ -343,8 +349,24 @@ private struct LogOutputView: View {
             return
         }
 
+        if !didInitialBottomScroll {
+            scrollToBottomAfterLayout(proxy: proxy)
+            return
+        }
+
         if isAtBottom {
             scrollToBottom(proxy: proxy, animated: true)
+        }
+    }
+
+    private func scrollToBottomAfterLayout(proxy: ScrollViewProxy) {
+        Task {
+            await Task.yield()
+            await MainActor.run {
+                scrollToBottom(proxy: proxy, animated: false)
+                didInitialBottomScroll = true
+                isAtBottom = true
+            }
         }
     }
 
