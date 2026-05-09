@@ -8,6 +8,7 @@ final class MacTMUXStore: ObservableObject {
     @AppStorage("terminalKind") private var terminalKindRaw = TerminalKind.terminalApp.rawValue
     @AppStorage("refreshInterval") var refreshInterval = 5.0
     @AppStorage("showResourceMetrics") private var showResourceMetricsRaw = true
+    @AppStorage("autoRefreshLogs") private var autoRefreshLogsRaw = true
 
     @Published private(set) var sessions: [TmuxSession] = []
     @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
@@ -20,13 +21,19 @@ final class MacTMUXStore: ObservableObject {
     private let client = TmuxClient()
     private let metricsClient = ProcessMetricsClient()
     private var refreshLoopStarted = false
+    private var logRefreshLoopStarted = false
 
     init() {
         DiagnosticLog.clear()
         DiagnosticLog.write("store init")
         Task {
             await refresh()
+        }
+        Task {
             await startRefreshLoop()
+        }
+        Task {
+            await startLogRefreshLoop()
         }
     }
 
@@ -73,6 +80,15 @@ final class MacTMUXStore: ObservableObject {
                     await refresh()
                 }
             }
+        }
+    }
+
+    var autoRefreshLogs: Bool {
+        get {
+            autoRefreshLogsRaw
+        }
+        set {
+            autoRefreshLogsRaw = newValue
         }
     }
 
@@ -132,6 +148,9 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func loadLogs(for session: TmuxSession) async {
+        guard !isLoadingLogs else {
+            return
+        }
         isLoadingLogs = true
         defer {
             isLoadingLogs = false
@@ -196,6 +215,24 @@ final class MacTMUXStore: ObservableObject {
             let seconds = max(2.0, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
             await refresh()
+        }
+    }
+
+    func startLogRefreshLoop() async {
+        guard !logRefreshLoopStarted else {
+            DiagnosticLog.write("log refresh loop already started")
+            return
+        }
+        logRefreshLoopStarted = true
+        DiagnosticLog.write("log refresh loop started")
+
+        while !Task.isCancelled {
+            let seconds = max(2.0, refreshInterval)
+            try? await Task.sleep(for: .seconds(seconds))
+            guard autoRefreshLogs, let selectedSession else {
+                continue
+            }
+            await loadLogs(for: selectedSession)
         }
     }
 

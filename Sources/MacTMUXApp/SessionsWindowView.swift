@@ -214,6 +214,13 @@ private struct SessionDetailView: View {
                     Text("Recent Output")
                         .font(.headline)
                     Spacer()
+                    Toggle("Auto", isOn: Binding(
+                        get: { store.autoRefreshLogs },
+                        set: { store.autoRefreshLogs = $0 }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
                     Button("Reload") {
                         Task {
                             await store.loadLogs(for: session)

@@ -61,7 +61,12 @@ struct SettingsView: View {
                     set: { store.showResourceMetrics = $0 }
                 ))
 
-                Text("When enabled, MacTMUX runs one lightweight ps sample per refresh and sums each tmux pane process with its child processes.")
+                Toggle("Auto-refresh selected logs", isOn: Binding(
+                    get: { store.autoRefreshLogs },
+                    set: { store.autoRefreshLogs = $0 }
+                ))
+
+                Text("CPU/RAM uses one lightweight ps sample per refresh. Logs auto-refresh only for the selected session.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

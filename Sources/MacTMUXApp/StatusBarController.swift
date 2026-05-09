@@ -48,6 +48,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
         Task {
             await store.refresh()
+            await store.startLogRefreshLoop()
         }
 
         popover.contentSize = NSSize(width: 380, height: panelHeight())
