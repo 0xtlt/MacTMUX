@@ -266,6 +266,40 @@ final class MacTMUXStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    func stopSessions(_ sessions: [TmuxSession]) async -> Set<String> {
+        let sessionsToStop = uniqueSessions(sessions)
+        guard !sessionsToStop.isEmpty else {
+            return []
+        }
+
+        let title = sessionsToStop.count == 1
+            ? "Stop \(sessionsToStop[0].name)?"
+            : "Stop \(sessionsToStop.count) sessions?"
+        guard confirm(title: title, message: bulkStopMessage(for: sessionsToStop)) else {
+            return []
+        }
+
+        var stoppedIDs = Set<String>()
+        var failures: [String] = []
+        for session in sessionsToStop {
+            do {
+                try await client.stop(session: session)
+                stoppedIDs.insert(session.id)
+            } catch {
+                failures.append("\(session.name): \(readableMessage(error))")
+            }
+        }
+
+        await refresh()
+        if failures.isEmpty {
+            errorMessage = nil
+        } else {
+            errorMessage = bulkStopFailureMessage(failures)
+        }
+        return stoppedIDs
+    }
+
     func restart(_ session: TmuxSession) async {
         guard confirm(title: "Restart \(session.name)?", message: "This will respawn the active pane in the selected tmux session.") else {
             return
@@ -282,6 +316,11 @@ final class MacTMUXStore: ObservableObject {
 
     func resetTmuxPathToAutodetect() {
         configuredTmuxPath = ""
+    }
+
+    func clearSelection() {
+        selectedSession = nil
+        clearLogs()
     }
 
     func metricsText(for session: TmuxSession) -> String? {
@@ -408,6 +447,30 @@ final class MacTMUXStore: ObservableObject {
         alert.addButton(withTitle: "Confirm")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func uniqueSessions(_ sessions: [TmuxSession]) -> [TmuxSession] {
+        var seenIDs = Set<String>()
+        return sessions.filter { session in
+            seenIDs.insert(session.id).inserted
+        }
+    }
+
+    private func bulkStopMessage(for sessions: [TmuxSession]) -> String {
+        let prefix = sessions.count == 1
+            ? "This will kill the selected tmux session."
+            : "This will kill the selected tmux sessions."
+        let shownNames = sessions.prefix(8).map { "- \($0.name)" }.joined(separator: "\n")
+        let remainingCount = sessions.count - 8
+        let remainingText = remainingCount > 0 ? "\nand \(remainingCount) more." : ""
+        return "\(prefix)\n\n\(shownNames)\(remainingText)"
+    }
+
+    private func bulkStopFailureMessage(_ failures: [String]) -> String {
+        let shownFailures = failures.prefix(3).joined(separator: "\n")
+        let remainingCount = failures.count - 3
+        let remainingText = remainingCount > 0 ? "\nand \(remainingCount) more." : ""
+        return "Failed to stop \(failures.count) session\(failures.count == 1 ? "" : "s"):\n\(shownFailures)\(remainingText)"
     }
 
     private func clearLogs() {

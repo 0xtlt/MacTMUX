@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionsWindowView: View {
     @EnvironmentObject private var store: MacTMUXStore
     @State private var isSidebarVisible = true
+    @State private var selectedSessionIDs = Set<String>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +32,12 @@ struct SessionsWindowView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                     .padding()
             }
+        }
+        .onAppear {
+            syncSelectionWithFocusedSession()
+        }
+        .onChange(of: sessionIDs) { _, _ in
+            pruneSelectedSessionIDs()
         }
     }
 
@@ -65,17 +72,7 @@ struct SessionsWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: Binding(
-                get: { store.selectedSession?.id },
-                set: { id in
-                    guard let id, let session = store.sessions.first(where: { $0.id == id }) else {
-                        return
-                    }
-                    Task {
-                        await store.select(session)
-                    }
-                }
-            )) {
+            List(selection: selectionBinding) {
                 ForEach(store.sessions) { session in
                     SessionRow(session: session)
                         .tag(session.id)
@@ -95,6 +92,12 @@ struct SessionsWindowView: View {
                                     await store.stop(session)
                                 }
                             }
+                            if selectedSessions.count > 1, selectedSessionIDs.contains(session.id) {
+                                Divider()
+                                Button("Stop \(selectedSessions.count) Selected") {
+                                    stopSelectedSessions()
+                                }
+                            }
                         }
                 }
             }
@@ -108,6 +111,15 @@ struct SessionsWindowView: View {
                 .disabled(store.isRefreshing)
 
                 Spacer()
+
+                if !selectedSessions.isEmpty {
+                    Button("Stop \(selectedSessions.count)", systemImage: "power") {
+                        stopSelectedSessions()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.red)
+                }
 
                 Text("\(store.sessions.count) sessions")
                     .foregroundStyle(.secondary)
@@ -125,6 +137,73 @@ struct SessionsWindowView: View {
             } else {
                 ContentUnavailableView("Select a session", systemImage: "terminal")
             }
+        }
+    }
+
+    private var selectionBinding: Binding<Set<String>> {
+        Binding(
+            get: {
+                selectedSessionIDs
+            },
+            set: { newSelection in
+                let previousSelection = selectedSessionIDs
+                selectedSessionIDs = newSelection
+                focusSessionAfterSelectionChange(from: previousSelection, to: newSelection)
+            }
+        )
+    }
+
+    private var selectedSessions: [TmuxSession] {
+        store.sessions.filter { selectedSessionIDs.contains($0.id) }
+    }
+
+    private var sessionIDs: [String] {
+        store.sessions.map(\.id)
+    }
+
+    private func focusSessionAfterSelectionChange(from previousSelection: Set<String>, to newSelection: Set<String>) {
+        guard !newSelection.isEmpty else {
+            Task { @MainActor in
+                store.clearSelection()
+            }
+            return
+        }
+
+        let addedIDs = newSelection.subtracting(previousSelection)
+        let focusID = store.sessions.first(where: { addedIDs.contains($0.id) })?.id
+            ?? store.sessions.first(where: { newSelection.contains($0.id) })?.id
+
+        guard let focusID, let session = store.sessions.first(where: { $0.id == focusID }) else {
+            return
+        }
+
+        Task {
+            await store.select(session)
+        }
+    }
+
+    private func syncSelectionWithFocusedSession() {
+        if selectedSessionIDs.isEmpty, let selectedSession = store.selectedSession {
+            selectedSessionIDs = [selectedSession.id]
+        }
+        pruneSelectedSessionIDs()
+    }
+
+    private func pruneSelectedSessionIDs() {
+        let validSessionIDs = Set(sessionIDs)
+        selectedSessionIDs.formIntersection(validSessionIDs)
+    }
+
+    private func stopSelectedSessions() {
+        let sessionsToStop = selectedSessions
+        guard !sessionsToStop.isEmpty else {
+            return
+        }
+
+        Task { @MainActor in
+            let stoppedIDs = await store.stopSessions(sessionsToStop)
+            selectedSessionIDs.subtract(stoppedIDs)
+            pruneSelectedSessionIDs()
         }
     }
 }
