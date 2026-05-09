@@ -121,6 +121,7 @@ struct SessionsWindowView: View {
         Group {
             if let session = store.selectedSession {
                 SessionDetailView(session: session)
+                    .id(session.id)
             } else {
                 ContentUnavailableView("Select a session", systemImage: "terminal")
             }
@@ -223,23 +224,169 @@ private struct SessionDetailView: View {
 
                     Button("Reload") {
                         Task {
-                            await store.loadLogs(for: session)
+                            await store.refreshLatestLogs(for: session)
                         }
                     }
                     .disabled(store.isLoadingLogs)
                 }
 
-                ScrollView {
-                    Text(store.isLoadingLogs ? "Loading..." : store.selectedLogs)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                }
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                LogOutputView(session: session)
             }
             .padding()
+        }
+    }
+}
+
+private enum LogScrollTarget {
+    static let top = "log-top"
+    static let bottom = "log-bottom"
+}
+
+private struct LogOutputView: View {
+    @EnvironmentObject private var store: MacTMUXStore
+    var session: TmuxSession
+
+    @State private var isAtBottom = true
+    @State private var pendingTopAnchorID: String?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    topSentinel(proxy: proxy)
+
+                    if store.logLines.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(store.logLines) { line in
+                            LogLineView(line: line)
+                                .id(line.id)
+                        }
+                    }
+
+                    bottomSentinel
+                }
+                .textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .onAppear {
+                scrollToBottom(proxy: proxy, animated: false)
+            }
+            .onChange(of: store.logRevision) { _, _ in
+                handleLogRevisionChange(proxy: proxy)
+            }
+        }
+    }
+
+    private func topSentinel(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 6) {
+            Color.clear
+                .frame(height: 1)
+                .id(LogScrollTarget.top)
+                .onAppear {
+                    loadOlderIfNeeded(proxy: proxy)
+                }
+
+            if store.isLoadingOlderLogs {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var bottomSentinel: some View {
+        Color.clear
+            .frame(height: 1)
+            .id(LogScrollTarget.bottom)
+            .onAppear {
+                isAtBottom = true
+            }
+            .onDisappear {
+                isAtBottom = false
+            }
+    }
+
+    private var emptyState: some View {
+        Text(store.isLoadingInitialLogs ? "Loading logs..." : "No logs captured yet")
+            .font(.system(.body, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
+    }
+
+    private func loadOlderIfNeeded(proxy: ScrollViewProxy) {
+        guard store.canLoadOlderLogs,
+              let anchorID = store.logLines.first?.id else {
+            return
+        }
+
+        pendingTopAnchorID = anchorID
+        Task {
+            await store.loadOlderLogs(for: session)
+            await MainActor.run {
+                if pendingTopAnchorID == anchorID {
+                    proxy.scrollTo(anchorID, anchor: .top)
+                    pendingTopAnchorID = nil
+                }
+            }
+        }
+    }
+
+    private func handleLogRevisionChange(proxy: ScrollViewProxy) {
+        if let pendingTopAnchorID {
+            proxy.scrollTo(pendingTopAnchorID, anchor: .top)
+            self.pendingTopAnchorID = nil
+            return
+        }
+
+        if isAtBottom {
+            scrollToBottom(proxy: proxy, animated: true)
+        }
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        let action = {
+            proxy.scrollTo(LogScrollTarget.bottom, anchor: .bottom)
+        }
+
+        if animated {
+            withAnimation(.linear(duration: 0.12), action)
+        } else {
+            action()
+        }
+    }
+}
+
+private struct LogLineView: View {
+    var line: LogLine
+
+    var body: some View {
+        Text(line.text.isEmpty ? " " : line.text)
+            .font(.system(.body, design: .monospaced))
+            .foregroundStyle(line.level.displayColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private extension LogLevel {
+    var displayColor: Color {
+        switch self {
+        case .error:
+            return .red
+        case .warning:
+            return .orange
+        case .success:
+            return .green
+        case .info:
+            return .blue
+        case .debug:
+            return .purple
+        case .plain:
+            return .primary
         }
     }
 }

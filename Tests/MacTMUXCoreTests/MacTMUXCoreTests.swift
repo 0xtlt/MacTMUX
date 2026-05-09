@@ -63,9 +63,18 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(list.executable, "/opt/homebrew/bin/tmux")
         XCTAssertEqual(list.arguments.prefix(2), ["-L", "main"])
         XCTAssertEqual(kill.arguments.suffix(2), ["-t", "api; rm -rf /"])
-        XCTAssertEqual(capture.arguments.suffix(4), ["-S", "-50", "-t", "api; rm -rf /"])
+        XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-1", "-t", "api; rm -rf /"])
         XCTAssertFalse(kill.arguments.contains("sh"))
         XCTAssertFalse(kill.arguments.contains("-c"))
+    }
+
+    func testBuildsCapturePaneWithExplicitRange() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "api", windows: 1, attached: false, createdAt: .now)
+
+        let capture = TmuxCommands.capturePane(session: session, startLine: -400, endLine: -201)
+
+        XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-400", "-E", "-201", "-t", "api"])
     }
 
     func testValidatesTmuxBinaryPath() throws {
@@ -130,6 +139,46 @@ final class MacTMUXCoreTests: XCTestCase {
 
         XCTAssertEqual(metrics[100]?.cpuPercent, 6.5)
         XCTAssertEqual(metrics[100]?.residentMemoryBytes, 6_000 * 1024)
+    }
+
+    func testClassifiesLogLevels() {
+        XCTAssertEqual(LogBuffer.classify("[error] failed request"), .error)
+        XCTAssertEqual(LogBuffer.classify("WARN deprecated API"), .warning)
+        XCTAssertEqual(LogBuffer.classify("server started status=200"), .success)
+        XCTAssertEqual(LogBuffer.classify("debug trace enabled"), .debug)
+        XCTAssertEqual(LogBuffer.classify("[info] loading"), .info)
+        XCTAssertEqual(LogBuffer.classify("plain message"), .plain)
+    }
+
+    func testAppendsLatestLogsWithoutDuplicates() {
+        var buffer = LogBuffer(pageSize: 3)
+        _ = buffer.reset(with: "a\nb\nc\n")
+
+        let result = buffer.appendLatest("b\nc\nd\ne\n")
+
+        XCTAssertEqual(result.insertedCount, 2)
+        XCTAssertFalse(result.replaced)
+        XCTAssertEqual(buffer.lines.map(\.text), ["a", "b", "c", "d", "e"])
+    }
+
+    func testPrependsOlderLogsWithoutDuplicates() {
+        var buffer = LogBuffer(pageSize: 3)
+        _ = buffer.reset(with: "c\nd\ne\n")
+
+        let result = buffer.prependOlder("a\nb\nc\n")
+
+        XCTAssertEqual(result.insertedCount, 2)
+        XCTAssertEqual(buffer.lines.map(\.text), ["a", "b", "c", "d", "e"])
+    }
+
+    func testLogBufferResetReplacesSessionLogs() {
+        var buffer = LogBuffer(pageSize: 3)
+        _ = buffer.reset(with: "old\nlogs\n")
+
+        let result = buffer.reset(with: "new\nlogs\n")
+
+        XCTAssertTrue(result.replaced)
+        XCTAssertEqual(buffer.lines.map(\.text), ["new", "logs"])
     }
 
     func testTerminalCommandEscapesSessionName() {

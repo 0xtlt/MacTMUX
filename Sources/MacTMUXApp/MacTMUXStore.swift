@@ -13,9 +13,12 @@ final class MacTMUXStore: ObservableObject {
     @Published private(set) var sessions: [TmuxSession] = []
     @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
     @Published private(set) var selectedSession: TmuxSession?
-    @Published private(set) var selectedLogs = ""
+    @Published private(set) var logBuffer = LogBuffer(pageSize: 200)
+    @Published private(set) var logRevision = 0
     @Published private(set) var isRefreshing = false
-    @Published private(set) var isLoadingLogs = false
+    @Published private(set) var isLoadingInitialLogs = false
+    @Published private(set) var isRefreshingLogs = false
+    @Published private(set) var isLoadingOlderLogs = false
     @Published var errorMessage: String?
 
     private let client = TmuxClient()
@@ -39,6 +42,18 @@ final class MacTMUXStore: ObservableObject {
 
     var compactSessions: [TmuxSession] {
         Array(sessions.prefix(5))
+    }
+
+    var logLines: [LogLine] {
+        logBuffer.lines
+    }
+
+    var canLoadOlderLogs: Bool {
+        logBuffer.hasMoreOlderLogs && !isLoadingInitialLogs && !isRefreshingLogs && !isLoadingOlderLogs
+    }
+
+    var isLoadingLogs: Bool {
+        isLoadingInitialLogs || isRefreshingLogs || isLoadingOlderLogs
     }
 
     var tmuxPath: String? {
@@ -124,7 +139,7 @@ final class MacTMUXStore: ObservableObject {
             await loadResourceMetricsIfNeeded(for: loadedSessions)
             if let selectedSession, !sessions.contains(where: { $0.id == selectedSession.id }) {
                 self.selectedSession = nil
-                selectedLogs = ""
+                clearLogs()
             }
             errorMessage = nil
         } catch {
@@ -143,24 +158,97 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func select(_ session: TmuxSession) async {
+        if selectedSession?.id != session.id {
+            clearLogs()
+        }
         selectedSession = session
-        await loadLogs(for: session)
+        await loadInitialLogs(for: session)
     }
 
     func loadLogs(for session: TmuxSession) async {
-        guard !isLoadingLogs else {
+        await refreshLatestLogs(for: session)
+    }
+
+    func loadInitialLogs(for session: TmuxSession) async {
+        guard !isLoadingInitialLogs else {
             return
         }
-        isLoadingLogs = true
+        isLoadingInitialLogs = true
         defer {
-            isLoadingLogs = false
+            isLoadingInitialLogs = false
         }
 
         do {
-            selectedLogs = try await client.captureLogs(session: session)
+            let output = try await client.captureLogs(session: session, startLine: -logBuffer.pageSize, endLine: -1)
+            var nextBuffer = LogBuffer(pageSize: logBuffer.pageSize)
+            _ = nextBuffer.reset(with: output)
+            guard selectedSession?.id == session.id else {
+                return
+            }
+            logBuffer = nextBuffer
+            logRevision += 1
             errorMessage = nil
         } catch {
-            selectedLogs = ""
+            clearLogs()
+            errorMessage = readableMessage(error)
+        }
+    }
+
+    func refreshLatestLogs(for session: TmuxSession) async {
+        guard !isLoadingInitialLogs, !isRefreshingLogs, selectedSession?.id == session.id else {
+            return
+        }
+        isRefreshingLogs = true
+        defer {
+            isRefreshingLogs = false
+        }
+
+        do {
+            let output = try await client.captureLogs(session: session, startLine: -logBuffer.pageSize, endLine: -1)
+            var nextBuffer = logBuffer
+            let result = nextBuffer.appendLatest(output)
+            guard selectedSession?.id == session.id else {
+                return
+            }
+            if result.changed {
+                logBuffer = nextBuffer
+                logRevision += 1
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = readableMessage(error)
+        }
+    }
+
+    func loadOlderLogs(for session: TmuxSession) async {
+        guard canLoadOlderLogs, selectedSession?.id == session.id else {
+            return
+        }
+        isLoadingOlderLogs = true
+        defer {
+            isLoadingOlderLogs = false
+        }
+
+        let pageSize = logBuffer.pageSize
+        let loadedLines = max(logBuffer.loadedBacklogLines, pageSize)
+        let startLine = -(loadedLines + pageSize)
+        let endLine = -(loadedLines + 1)
+
+        do {
+            let output = try await client.captureLogs(session: session, startLine: startLine, endLine: endLine)
+            var nextBuffer = logBuffer
+            let result = nextBuffer.prependOlder(output)
+            guard selectedSession?.id == session.id else {
+                return
+            }
+            if result.changed {
+                logBuffer = nextBuffer
+                logRevision += 1
+            } else {
+                logBuffer = nextBuffer
+            }
+            errorMessage = nil
+        } catch {
             errorMessage = readableMessage(error)
         }
     }
@@ -185,7 +273,7 @@ final class MacTMUXStore: ObservableObject {
 
         do {
             try await client.restartActivePane(session: session)
-            await loadLogs(for: session)
+            await refreshLatestLogs(for: session)
             errorMessage = nil
         } catch {
             errorMessage = readableMessage(error)
@@ -232,7 +320,7 @@ final class MacTMUXStore: ObservableObject {
             guard autoRefreshLogs, let selectedSession else {
                 continue
             }
-            await loadLogs(for: selectedSession)
+            await refreshLatestLogs(for: selectedSession)
         }
     }
 
@@ -320,6 +408,13 @@ final class MacTMUXStore: ObservableObject {
         alert.addButton(withTitle: "Confirm")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func clearLogs() {
+        var nextBuffer = logBuffer
+        nextBuffer.clear()
+        logBuffer = nextBuffer
+        logRevision += 1
     }
 
     private func readableMessage(_ error: Error) -> String {

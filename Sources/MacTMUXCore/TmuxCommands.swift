@@ -23,13 +23,19 @@ public enum TmuxCommands {
     }
 
     public static func capturePane(session: TmuxSession, lines: Int = 200) -> CommandSpec {
+        capturePane(session: session, startLine: -lines, endLine: -1)
+    }
+
+    public static func capturePane(session: TmuxSession, startLine: Int, endLine: Int) -> CommandSpec {
         CommandSpec(
             executable: session.server.binaryPath,
             arguments: serverArguments(for: session.server) + [
                 "capture-pane",
                 "-p",
                 "-S",
-                "-\(lines)",
+                "\(startLine)",
+                "-E",
+                "\(endLine)",
                 "-t",
                 session.name
             ]

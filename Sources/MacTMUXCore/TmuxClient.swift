@@ -21,8 +21,8 @@ public actor TmuxClient {
         return TmuxOutputParser.sortNewestFirst(parsedSessions)
     }
 
-    public func captureLogs(session: TmuxSession) async throws -> String {
-        let result = try await runner.run(TmuxCommands.capturePane(session: session))
+    public func captureLogs(session: TmuxSession, startLine: Int = -200, endLine: Int = -1) async throws -> String {
+        let result = try await runner.run(TmuxCommands.capturePane(session: session, startLine: startLine, endLine: endLine))
         if result.exitCode != 0 {
             throw MacTMUXError.commandFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
