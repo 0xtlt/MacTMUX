@@ -12,6 +12,7 @@ swift build -c "$CONFIGURATION"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "$ROOT_DIR/Resources/MacTMUX.icns" "$APP_DIR/Contents/Resources/MacTMUX.icns"
 cp "$PRODUCT_DIR/MacTMUX" "$APP_DIR/Contents/MacOS/MacTMUX"
 chmod +x "$APP_DIR/Contents/MacOS/MacTMUX"
 

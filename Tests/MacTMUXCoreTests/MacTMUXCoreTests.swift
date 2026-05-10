@@ -150,6 +150,49 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(LogBuffer.classify("plain message"), .plain)
     }
 
+    func testLogFilterSearchIsCaseInsensitive() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria(query: "TIMEOUT")
+
+        XCTAssertEqual(criteria.filter(lines).map(\.text), ["fatal upstream timeout"])
+    }
+
+    func testLogFilterErrorOnly() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria(enabledLevels: [.error])
+
+        XCTAssertEqual(criteria.filter(lines).map(\.level), [.error])
+    }
+
+    func testLogFilterMultipleLevels() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria(enabledLevels: [.error, .warning])
+
+        XCTAssertEqual(criteria.filter(lines).map(\.level), [.error, .warning])
+    }
+
+    func testLogFilterCombinesQueryAndLevels() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria(query: "deprecated", enabledLevels: [.error, .warning])
+
+        XCTAssertEqual(criteria.filter(lines).map(\.text), ["deprecated endpoint"])
+    }
+
+    func testLogFilterEmptyLevelSetReturnsNoLines() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria(enabledLevels: [])
+
+        XCTAssertTrue(criteria.filter(lines).isEmpty)
+    }
+
+    func testLogFilterDefaultReturnsAllLines() {
+        let lines = sampleLogLines()
+        let criteria = LogFilterCriteria()
+
+        XCTAssertEqual(criteria.filter(lines), lines)
+        XCTAssertFalse(criteria.isActive)
+    }
+
     func testAppendsLatestLogsWithoutDuplicates() {
         var buffer = LogBuffer(pageSize: 3)
         _ = buffer.reset(with: "a\nb\nc\n")
@@ -269,5 +312,15 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(command.arguments.prefix(4), ["new-workspace", "--name", "MacTMUX api; echo bad", "--cwd"])
         XCTAssertTrue(command.arguments.contains("--command"))
         XCTAssertTrue(command.arguments.contains("'/opt/homebrew/bin/tmux' 'attach-session' '-t' 'api; echo bad'"))
+    }
+
+    private func sampleLogLines() -> [LogLine] {
+        [
+            LogLine(id: "1", text: "fatal upstream timeout", level: .error, sequence: 1),
+            LogLine(id: "2", text: "deprecated endpoint", level: .warning, sequence: 2),
+            LogLine(id: "3", text: "server ready", level: .success, sequence: 3),
+            LogLine(id: "4", text: "debug trace enabled", level: .debug, sequence: 4),
+            LogLine(id: "5", text: "plain text", level: .plain, sequence: 5)
+        ]
     }
 }

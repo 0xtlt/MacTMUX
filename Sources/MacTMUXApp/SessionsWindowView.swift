@@ -8,9 +8,6 @@ struct SessionsWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
-            Divider()
-
             HStack(spacing: 0) {
                 if isSidebarVisible {
                     sidebar
@@ -39,35 +36,6 @@ struct SessionsWindowView: View {
         .onChange(of: sessionIDs) { _, _ in
             pruneSelectedSessionIDs()
         }
-    }
-
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            Button {
-                withAnimation(.snappy(duration: 0.18)) {
-                    isSidebarVisible.toggle()
-                }
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.primary.opacity(0.08))
-            )
-            .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
-
-            Text("MacTMUX Sessions")
-                .font(.headline)
-                .lineLimit(1)
-
-            Spacer()
-        }
-        .padding(.horizontal, 18)
-        .frame(height: 56)
     }
 
     private var sidebar: some View {
@@ -103,6 +71,8 @@ struct SessionsWindowView: View {
             }
 
             HStack {
+                sidebarToggleButton
+
                 Button("Refresh") {
                     Task {
                         await store.refresh()
@@ -138,6 +108,32 @@ struct SessionsWindowView: View {
                 ContentUnavailableView("Select a session", systemImage: "terminal")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            if !isSidebarVisible {
+                sidebarToggleButton
+                    .padding(12)
+            }
+        }
+    }
+
+    private var sidebarToggleButton: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.18)) {
+                isSidebarVisible.toggle()
+            }
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.primary.opacity(0.08))
+        )
+        .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
     }
 
     private var selectionBinding: Binding<Set<String>> {
@@ -325,43 +321,95 @@ private struct LogOutputView: View {
     @EnvironmentObject private var store: MacTMUXStore
     var session: TmuxSession
 
+    @State private var filterCriteria = LogFilterCriteria()
     @State private var isAtBottom = true
     @State private var pendingTopAnchorID: String?
     @State private var didInitialBottomScroll = false
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    topSentinel(proxy: proxy)
+        VStack(alignment: .leading, spacing: 8) {
+            filterControls
 
-                    if store.logLines.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(store.logLines) { line in
-                            LogLineView(line: line)
-                                .id(line.id)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        topSentinel(proxy: proxy)
+
+                        if displayedLogLines.isEmpty {
+                            emptyState
+                        } else {
+                            ForEach(displayedLogLines) { line in
+                                LogLineView(line: line)
+                                    .id(line.id)
+                            }
                         }
-                    }
 
-                    bottomSentinel
+                        bottomSentinel
+                    }
+                    .textSelection(.enabled)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .textSelection(.enabled)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onAppear {
+                    didInitialBottomScroll = false
+                    scrollToBottomAfterLayout(proxy: proxy)
+                }
+                .onChange(of: store.logRevision) { _, _ in
+                    handleLogRevisionChange(proxy: proxy)
+                }
+                .onChange(of: session.id) { _, _ in
+                    didInitialBottomScroll = false
+                    filterCriteria = LogFilterCriteria()
+                    scrollToBottomAfterLayout(proxy: proxy)
+                }
             }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .onAppear {
-                didInitialBottomScroll = false
-                scrollToBottomAfterLayout(proxy: proxy)
+        }
+    }
+
+    private var displayedLogLines: [LogLine] {
+        filterCriteria.filter(store.logLines)
+    }
+
+    private var filterControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                TextField("Search logs", text: $filterCriteria.query)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+
+                Button("All") {
+                    filterCriteria = LogFilterCriteria()
+                }
+                .controlSize(.small)
+
+                Button("Errors") {
+                    filterCriteria.enabledLevels = [.error]
+                }
+                .controlSize(.small)
+
+                Spacer()
+
+                if filterCriteria.isActive {
+                    Text("\(displayedLogLines.count) / \(store.logLines.count) lines")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
-            .onChange(of: store.logRevision) { _, _ in
-                handleLogRevisionChange(proxy: proxy)
-            }
-            .onChange(of: session.id) { _, _ in
-                didInitialBottomScroll = false
-                scrollToBottomAfterLayout(proxy: proxy)
+
+            HStack(spacing: 6) {
+                ForEach(logLevelFilterItems, id: \.level) { item in
+                    LogLevelFilterChip(
+                        title: item.title,
+                        level: item.level,
+                        isEnabled: filterCriteria.enabledLevels.contains(item.level),
+                        action: {
+                            toggleLevel(item.level)
+                        }
+                    )
+                }
             }
         }
     }
@@ -397,18 +445,25 @@ private struct LogOutputView: View {
     }
 
     private var emptyState: some View {
-        Text(store.isLoadingSelectedInitialLogs ? "Loading logs..." : "No logs captured yet")
+        Text(emptyStateText)
             .font(.system(.body, design: .monospaced))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
     }
 
+    private var emptyStateText: String {
+        if store.logLines.isEmpty {
+            return store.isLoadingSelectedInitialLogs ? "Loading logs..." : "No logs captured yet"
+        }
+        return "No matching logs"
+    }
+
     private func loadOlderIfNeeded(proxy: ScrollViewProxy) {
-        guard store.canLoadOlderLogs,
-              let anchorID = store.logLines.first?.id else {
+        guard store.canLoadOlderLogs else {
             return
         }
 
+        let anchorID = displayedLogLines.first?.id ?? LogScrollTarget.top
         pendingTopAnchorID = anchorID
         Task {
             await store.loadOlderLogs(for: session)
@@ -439,14 +494,14 @@ private struct LogOutputView: View {
     }
 
     private func scrollToBottomAfterLayout(proxy: ScrollViewProxy) {
-        guard !store.logLines.isEmpty else {
+        guard !displayedLogLines.isEmpty else {
             return
         }
 
         Task {
             await Task.yield()
             await MainActor.run {
-                guard !store.logLines.isEmpty else {
+                guard !displayedLogLines.isEmpty else {
                     return
                 }
                 scrollToBottom(proxy: proxy, animated: false)
@@ -467,7 +522,51 @@ private struct LogOutputView: View {
             action()
         }
     }
+
+    private func toggleLevel(_ level: LogLevel) {
+        if filterCriteria.enabledLevels.contains(level) {
+            filterCriteria.enabledLevels.remove(level)
+        } else {
+            filterCriteria.enabledLevels.insert(level)
+        }
+    }
 }
+
+private struct LogLevelFilterChip: View {
+    var title: String
+    var level: LogLevel
+    var isEnabled: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .foregroundStyle(isEnabled ? level.displayColor : .secondary)
+                .background(
+                    Capsule()
+                        .fill(isEnabled ? level.displayColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(isEnabled ? level.displayColor.opacity(0.45) : Color.primary.opacity(0.08))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private let logLevelFilterItems: [(level: LogLevel, title: String)] = [
+    (.error, "Error"),
+    (.warning, "Warn"),
+    (.success, "Success"),
+    (.info, "Info"),
+    (.debug, "Debug"),
+    (.plain, "Plain")
+]
 
 private struct LogLineView: View {
     var line: LogLine

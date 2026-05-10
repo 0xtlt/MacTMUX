@@ -6,6 +6,8 @@
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>MacTMUX</string>
+    <key>CFBundleIconFile</key>
+    <string>MacTMUX</string>
     <key>CFBundleIdentifier</key>
     <string>com.0xtlt.mactmux</string>
     <key>CFBundleInfoDictionaryVersion</key>

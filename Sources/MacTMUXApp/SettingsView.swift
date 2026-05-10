@@ -1,10 +1,13 @@
 import MacTMUXCore
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var store: MacTMUXStore
+    @StateObject private var launchAtLogin = LaunchAtLoginController()
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Settings")
@@ -13,6 +16,30 @@ struct SettingsView: View {
                 Text("MacTMUX")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            SettingsSection(title: "Startup") {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin.isEnabled },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+                .disabled(launchAtLogin.isUnavailable)
+
+                Text(launchAtLogin.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let errorMessage = launchAtLogin.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                if launchAtLogin.shouldShowLoginItemsButton {
+                    Button("Open Login Items Settings") {
+                        launchAtLogin.openLoginItemsSettings()
+                    }
+                }
             }
 
             SettingsSection(title: "Terminal") {
@@ -80,11 +107,17 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 0)
         }
         .padding(20)
+        }
         .frame(width: 480)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            launchAtLogin.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
+        }
     }
 
     private func terminalLabel(_ terminal: TerminalKind) -> String {

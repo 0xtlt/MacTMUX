@@ -23,6 +23,41 @@ public struct LogLine: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
+public struct LogFilterCriteria: Equatable, Sendable {
+    public var query: String
+    public var enabledLevels: Set<LogLevel>
+
+    public init(query: String = "", enabledLevels: Set<LogLevel> = LogLevel.allCasesSet) {
+        self.query = query
+        self.enabledLevels = enabledLevels
+    }
+
+    public var isActive: Bool {
+        !normalizedQuery.isEmpty || enabledLevels != LogLevel.allCasesSet
+    }
+
+    public func matches(_ line: LogLine) -> Bool {
+        guard enabledLevels.contains(line.level) else {
+            return false
+        }
+
+        let query = normalizedQuery
+        guard !query.isEmpty else {
+            return true
+        }
+
+        return line.text.localizedCaseInsensitiveContains(query)
+    }
+
+    public func filter(_ lines: [LogLine]) -> [LogLine] {
+        lines.filter(matches)
+    }
+
+    private var normalizedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 public struct LogMergeResult: Equatable, Sendable {
     public var insertedCount: Int
     public var replaced: Bool
@@ -35,6 +70,10 @@ public struct LogMergeResult: Equatable, Sendable {
     public var changed: Bool {
         insertedCount > 0 || replaced
     }
+}
+
+public extension LogLevel {
+    static let allCasesSet: Set<LogLevel> = [.error, .warning, .success, .info, .debug, .plain]
 }
 
 public struct LogBuffer: Equatable, Sendable {

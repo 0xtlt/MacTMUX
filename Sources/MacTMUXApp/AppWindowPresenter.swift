@@ -7,6 +7,9 @@ final class AppWindowPresenter {
 
     private var settingsWindow: NSWindow?
     private var sessionsWindow: NSWindow?
+    private let sessionsWindowDelegate = WindowCloseDelegate {
+        AppWindowPresenter.shared.updateActivationPolicyAfterWindowClose()
+    }
 
     private init() {}
 
@@ -40,8 +43,9 @@ final class AppWindowPresenter {
                 defer: false
             )
             window.title = "MacTMUX Sessions"
-            window.titleVisibility = .hidden
+            window.titleVisibility = .visible
             window.isReleasedWhenClosed = false
+            window.delegate = sessionsWindowDelegate
             window.contentView = NSHostingView(
                 rootView: SessionsWindowView()
                     .environmentObject(store)
@@ -54,14 +58,37 @@ final class AppWindowPresenter {
         Task {
             await store.refresh()
         }
-        show(window: sessionsWindow)
+        show(window: sessionsWindow, requiresDockIcon: true)
     }
 
-    private func show(window: NSWindow?) {
+    private func show(window: NSWindow?, requiresDockIcon: Bool = false) {
         guard let window else {
             return
         }
+        if requiresDockIcon {
+            NSApplication.shared.setActivationPolicy(.regular)
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func updateActivationPolicyAfterWindowClose() {
+        guard sessionsWindow?.isVisible != true else {
+            return
+        }
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+}
+
+@MainActor
+private final class WindowCloseDelegate: NSObject, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose()
     }
 }
