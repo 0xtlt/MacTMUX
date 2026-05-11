@@ -12,6 +12,13 @@ V1 features:
 - Restarts the active pane conservatively when tmux can resolve the target.
 - Provides settings for tmux path and refresh interval.
 
+## Install
+
+```sh
+brew tap 0xtlt/tap
+brew install mactmux
+```
+
 ## Build
 
 ```sh
