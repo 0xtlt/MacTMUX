@@ -1,4 +1,5 @@
 import AppKit
+import MacTMUXCore
 import SwiftUI
 
 @MainActor
@@ -34,7 +35,7 @@ final class AppWindowPresenter {
         show(window: settingsWindow)
     }
 
-    func showSessions(store: MacTMUXStore) {
+    func showSessions(store: MacTMUXStore, selecting session: TmuxSession? = nil) {
         if sessionsWindow == nil {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 840, height: 560),
@@ -56,7 +57,11 @@ final class AppWindowPresenter {
         }
 
         Task {
-            await store.refresh()
+            if let session {
+                await store.select(session)
+            } else {
+                await store.refresh()
+            }
         }
         show(window: sessionsWindow, requiresDockIcon: true)
     }

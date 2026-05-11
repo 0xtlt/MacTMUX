@@ -130,9 +130,7 @@ private struct MenuSessionRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Button {
-                Task {
-                    await store.open(session)
-                }
+                AppWindowPresenter.shared.showSessions(store: store, selecting: session)
             } label: {
                 HStack(spacing: 10) {
                     Circle()

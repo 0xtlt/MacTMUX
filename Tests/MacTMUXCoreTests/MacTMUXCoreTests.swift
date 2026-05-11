@@ -63,7 +63,7 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(list.executable, "/opt/homebrew/bin/tmux")
         XCTAssertEqual(list.arguments.prefix(2), ["-L", "main"])
         XCTAssertEqual(kill.arguments.suffix(2), ["-t", "api; rm -rf /"])
-        XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-1", "-t", "api; rm -rf /"])
+        XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-", "-t", "api; rm -rf /"])
         XCTAssertFalse(kill.arguments.contains("sh"))
         XCTAssertFalse(kill.arguments.contains("-c"))
     }

@@ -35,11 +35,15 @@ public enum TmuxCommands {
                 "-S",
                 "\(startLine)",
                 "-E",
-                "\(endLine)",
+                endLineArgument(endLine),
                 "-t",
                 session.name
             ]
         )
+    }
+
+    private static func endLineArgument(_ endLine: Int) -> String {
+        endLine == -1 ? "-" : "\(endLine)"
     }
 
     public static func killSession(session: TmuxSession) -> CommandSpec {
