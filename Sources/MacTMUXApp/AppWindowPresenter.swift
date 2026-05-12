@@ -101,6 +101,8 @@ private final class WindowCloseDelegate: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        onClose()
+        DispatchQueue.main.async { [onClose] in
+            onClose()
+        }
     }
 }
