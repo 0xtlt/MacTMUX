@@ -8,7 +8,7 @@ final class AppWindowPresenter {
 
     private var settingsWindow: NSWindow?
     private var sessionsWindow: NSWindow?
-    private let sessionsWindowDelegate = WindowCloseDelegate {
+    private let windowCloseDelegate = WindowCloseDelegate {
         AppWindowPresenter.shared.updateActivationPolicyAfterWindowClose()
     }
 
@@ -24,6 +24,7 @@ final class AppWindowPresenter {
             )
             window.title = "MacTMUX Settings"
             window.isReleasedWhenClosed = false
+            window.delegate = windowCloseDelegate
             window.contentView = NSHostingView(
                 rootView: SettingsView()
                     .environmentObject(store)
@@ -46,7 +47,7 @@ final class AppWindowPresenter {
             window.title = "MacTMUX Sessions"
             window.titleVisibility = .visible
             window.isReleasedWhenClosed = false
-            window.delegate = sessionsWindowDelegate
+            window.delegate = windowCloseDelegate
             window.contentView = NSHostingView(
                 rootView: SessionsWindowView()
                     .environmentObject(store)
@@ -75,6 +76,12 @@ final class AppWindowPresenter {
         }
         NSApplication.shared.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeUserWindowsAndReturnToMenuBar() {
+        sessionsWindow?.close()
+        settingsWindow?.close()
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     private func updateActivationPolicyAfterWindowClose() {

@@ -97,7 +97,7 @@ struct MenuBarContentView: View {
             .buttonStyle(.bordered)
 
             Button {
-                NSApplication.shared.terminate(nil)
+                MacTMUXAppDelegate.shared?.requestFullQuit()
             } label: {
                 Label("Quit", systemImage: "power")
                     .frame(maxWidth: .infinity)
