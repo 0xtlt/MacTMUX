@@ -171,9 +171,13 @@ final class MacTMUXStore: ObservableObject {
             let loadedSessions = try await loadSessions(tmuxPath: tmuxPath)
             sessions = loadedSessions
             await loadResourceMetricsIfNeeded(for: loadedSessions)
-            if let selectedSession, !sessions.contains(where: { $0.id == selectedSession.id }) {
-                self.selectedSession = nil
-                clearLogs()
+            if let selectedSession {
+                if let refreshedSelection = loadedSessions.first(where: { $0.id == selectedSession.id }) {
+                    self.selectedSession = refreshedSelection
+                } else {
+                    self.selectedSession = nil
+                    clearLogs()
+                }
             }
             errorMessage = nil
         } catch {

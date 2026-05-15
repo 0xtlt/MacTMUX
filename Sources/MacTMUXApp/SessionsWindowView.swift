@@ -1,3 +1,4 @@
+import AppKit
 import MacTMUXCore
 import SwiftUI
 
@@ -50,10 +51,21 @@ struct SessionsWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: selectionBinding) {
-                ForEach(store.sessions) { session in
-                    SessionRow(session: session)
-                        .tag(session.id)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(store.sessions) { session in
+                        SessionRow(
+                            session: session,
+                            isSelected: selectedSessionIDs.contains(session.id)
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                                toggleSessionSelection(session)
+                            } else {
+                                selectSession(session)
+                            }
+                        }
                         .contextMenu {
                             Button("Open") {
                                 Task {
@@ -77,7 +89,11 @@ struct SessionsWindowView: View {
                                 }
                             }
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                    }
                 }
+                .padding(.vertical, 8)
             }
 
             HStack {
@@ -146,25 +162,28 @@ struct SessionsWindowView: View {
         .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
     }
 
-    private var selectionBinding: Binding<Set<String>> {
-        Binding(
-            get: {
-                selectedSessionIDs
-            },
-            set: { newSelection in
-                let previousSelection = selectedSessionIDs
-                selectedSessionIDs = newSelection
-                focusSessionAfterSelectionChange(from: previousSelection, to: newSelection)
-            }
-        )
-    }
-
     private var selectedSessions: [TmuxSession] {
         store.sessions.filter { selectedSessionIDs.contains($0.id) }
     }
 
     private var sessionIDs: [String] {
         store.sessions.map(\.id)
+    }
+
+    private func selectSession(_ session: TmuxSession) {
+        let previousSelection = selectedSessionIDs
+        selectedSessionIDs = [session.id]
+        focusSessionAfterSelectionChange(from: previousSelection, to: selectedSessionIDs)
+    }
+
+    private func toggleSessionSelection(_ session: TmuxSession) {
+        let previousSelection = selectedSessionIDs
+        if selectedSessionIDs.contains(session.id) {
+            selectedSessionIDs.remove(session.id)
+        } else {
+            selectedSessionIDs.insert(session.id)
+        }
+        focusSessionAfterSelectionChange(from: previousSelection, to: selectedSessionIDs)
     }
 
     private func focusSessionAfterSelectionChange(from previousSelection: Set<String>, to newSelection: Set<String>) {
@@ -196,8 +215,18 @@ struct SessionsWindowView: View {
     }
 
     private func pruneSelectedSessionIDs() {
+        let previousSelection = selectedSessionIDs
+        let focusedID = store.selectedSession?.id
         let validSessionIDs = Set(sessionIDs)
         selectedSessionIDs.formIntersection(validSessionIDs)
+
+        guard selectedSessionIDs != previousSelection else {
+            return
+        }
+
+        if selectedSessionIDs.isEmpty || focusedID.map({ !selectedSessionIDs.contains($0) }) == true {
+            focusSessionAfterSelectionChange(from: previousSelection, to: selectedSessionIDs)
+        }
     }
 
     private func stopSelectedSessions() {
@@ -307,6 +336,7 @@ private final class ResizeCursorView: NSView {
 private struct SessionRow: View {
     @EnvironmentObject private var store: MacTMUXStore
     var session: TmuxSession
+    var isSelected = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -322,10 +352,17 @@ private struct SessionRow: View {
 
             Text(subtitle)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? .white.opacity(0.82) : .secondary)
                 .lineLimit(1)
         }
+        .foregroundStyle(isSelected ? .white : .primary)
         .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isSelected ? Color.accentColor : Color.clear)
+        )
     }
 
     private var subtitle: String {
