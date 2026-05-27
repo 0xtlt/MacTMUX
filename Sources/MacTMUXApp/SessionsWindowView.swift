@@ -5,22 +5,19 @@ import SwiftUI
 struct SessionsWindowView: View {
     @EnvironmentObject private var store: MacTMUXStore
     @AppStorage("sessionsSidebarWidth") private var sidebarWidth = Double(SidebarWidth.defaultValue)
-    @State private var isSidebarVisible = true
     @State private var selectedSessionIDs = Set<String>()
 
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    if isSidebarVisible {
-                        sidebar
-                            .frame(width: effectiveSidebarWidth(for: geometry.size.width))
+                    sidebar
+                        .frame(width: effectiveSidebarWidth(for: geometry.size.width))
 
-                        SidebarResizeHandle(
-                            sidebarWidth: $sidebarWidth,
-                            availableWidth: geometry.size.width
-                        )
-                    }
+                    SidebarResizeHandle(
+                        sidebarWidth: $sidebarWidth,
+                        availableWidth: geometry.size.width
+                    )
 
                     detail
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -42,6 +39,9 @@ struct SessionsWindowView: View {
         }
         .onChange(of: sessionIDs) { _, _ in
             pruneSelectedSessionIDs()
+        }
+        .onChange(of: store.selectedSession?.id) { _, _ in
+            syncSelectionWithFocusedSession()
         }
     }
 
@@ -96,29 +96,26 @@ struct SessionsWindowView: View {
                 .padding(.vertical, 8)
             }
 
-            HStack {
-                sidebarToggleButton
-
-                Button("Refresh") {
+            HStack(spacing: 8) {
+                Button {
                     Task {
                         await store.refresh()
                     }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.isRefreshing)
+                .controlSize(.small)
+                .labelStyle(.iconOnly)
+                .help("Refresh sessions")
 
                 Spacer()
 
-                if !selectedSessions.isEmpty {
-                    Button("Stop \(selectedSessions.count)", systemImage: "power") {
-                        stopSelectedSessions()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.red)
-                }
-
                 Text("\(store.sessions.count) sessions")
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
             .padding(12)
         }
@@ -135,31 +132,6 @@ struct SessionsWindowView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .topLeading) {
-            if !isSidebarVisible {
-                sidebarToggleButton
-                    .padding(12)
-            }
-        }
-    }
-
-    private var sidebarToggleButton: some View {
-        Button {
-            withAnimation(.snappy(duration: 0.18)) {
-                isSidebarVisible.toggle()
-            }
-        } label: {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(.plain)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(Color.primary.opacity(0.08))
-        )
-        .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
     }
 
     private var selectedSessions: [TmuxSession] {
@@ -208,7 +180,8 @@ struct SessionsWindowView: View {
     }
 
     private func syncSelectionWithFocusedSession() {
-        if selectedSessionIDs.isEmpty, let selectedSession = store.selectedSession {
+        if let selectedSession = store.selectedSession,
+           selectedSessionIDs.count != 1 || !selectedSessionIDs.contains(selectedSession.id) {
             selectedSessionIDs = [selectedSession.id]
         }
         pruneSelectedSessionIDs()
@@ -422,28 +395,7 @@ private struct SessionDetailView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Recent Output")
-                        .font(.headline)
-                    Spacer()
-                    Toggle("Auto", isOn: Binding(
-                        get: { store.autoRefreshLogs },
-                        set: { store.autoRefreshLogs = $0 }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-
-                    Button("Reload") {
-                        Task {
-                            await store.refreshLatestLogs(for: session)
-                        }
-                    }
-                    .disabled(store.isLoadingLogs)
-                }
-
-                LogOutputView(session: session)
-            }
+            LogOutputView(session: session)
             .padding()
         }
     }
@@ -471,7 +423,7 @@ private struct LogOutputView: View {
     @State private var didInitialBottomScroll = false
     @State private var logTextRevision = 0
     @State private var logTextRevisionCause = LogTextRevisionCause.initial
-    @State private var wrapsLongLogLines = false
+    @AppStorage("wrapsLongLogLines") private var wrapsLongLogLines = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -526,17 +478,21 @@ private struct LogOutputView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 260)
 
-                Button("All") {
-                    filterCriteria = LogFilterCriteria()
-                }
-                .controlSize(.small)
-
-                Button("Errors") {
-                    filterCriteria.enabledLevels = [.error]
-                }
-                .controlSize(.small)
-
                 Spacer()
+
+                Toggle("Auto", isOn: Binding(
+                    get: { store.autoRefreshLogs },
+                    set: { store.autoRefreshLogs = $0 }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Button("Reload") {
+                    Task {
+                        await store.refreshLatestLogs(for: session)
+                    }
+                }
+                .disabled(store.isLoadingLogs)
 
                 Toggle("Wrap", isOn: $wrapsLongLogLines)
                     .toggleStyle(.switch)
@@ -679,23 +635,6 @@ private extension LogLevel {
             return .primary
         }
     }
-
-    var nsColor: NSColor {
-        switch self {
-        case .error:
-            return .systemRed
-        case .warning:
-            return .systemOrange
-        case .success:
-            return .systemGreen
-        case .info:
-            return .systemBlue
-        case .debug:
-            return .systemPurple
-        case .plain:
-            return .labelColor
-        }
-    }
 }
 
 private struct SelectableLogTextView: NSViewRepresentable {
@@ -731,10 +670,11 @@ private struct SelectableLogTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView()
+        let textView = LogTextView()
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
+        textView.isAutomaticLinkDetectionEnabled = false
         textView.importsGraphics = false
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 12, height: 12)
@@ -743,7 +683,9 @@ private struct SelectableLogTextView: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.font = Self.logFont
+        textView.font = LogTextAttributedStringBuilder.logFont
+        textView.linkTextAttributes = LogTextAttributedStringBuilder.linkTextAttributes
+        textView.delegate = context.coordinator
 
         scrollView.documentView = textView
         configureWrapping(for: textView, in: scrollView, wrapsLines: wrapsLines)
@@ -786,7 +728,8 @@ private struct SelectableLogTextView: NSViewRepresentable {
         }
 
         if context.coordinator.lastRevision != revision {
-            textView.textStorage?.setAttributedString(Self.attributedString(for: lines))
+            textView.textStorage?.setAttributedString(LogTextAttributedStringBuilder.attributedString(for: lines))
+            (textView as? LogTextView)?.clearCommandLinkInteraction()
             textView.selectedRanges = Self.validSelectionRanges(selectedRanges, textLength: textView.string.utf16.count)
             textView.sizeToFit()
             context.coordinator.lastRevision = revision
@@ -858,25 +801,6 @@ private struct SelectableLogTextView: NSViewRepresentable {
         }
     }
 
-    private static func attributedString(for lines: [LogLine]) -> NSAttributedString {
-        let output = NSMutableAttributedString()
-        for (index, line) in lines.enumerated() {
-            let text = line.text.isEmpty ? " " : line.text
-            output.append(NSAttributedString(string: text, attributes: attributes(for: line.level)))
-            if index < lines.count - 1 {
-                output.append(NSAttributedString(string: "\n", attributes: attributes(for: .plain)))
-            }
-        }
-        return output
-    }
-
-    private static func attributes(for level: LogLevel) -> [NSAttributedString.Key: Any] {
-        [
-            .font: logFont,
-            .foregroundColor: level.nsColor
-        ]
-    }
-
     private static func validSelectionRanges(_ ranges: [NSValue], textLength: Int) -> [NSValue] {
         let validRanges = ranges.compactMap { value -> NSValue? in
             let range = value.rangeValue
@@ -890,10 +814,8 @@ private struct SelectableLogTextView: NSViewRepresentable {
         return validRanges.isEmpty ? [NSValue(range: NSRange(location: 0, length: 0))] : validRanges
     }
 
-    private static let logFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         var onBottomStateChange: (Bool) -> Void
         var onTopReached: () -> Void
         var onInitialScrollCompleted: () -> Void
@@ -913,6 +835,18 @@ private struct SelectableLogTextView: NSViewRepresentable {
             self.onBottomStateChange = onBottomStateChange
             self.onTopReached = onTopReached
             self.onInitialScrollCompleted = onInitialScrollCompleted
+            super.init()
+        }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let event = NSApp.currentEvent,
+                  LogTextAttributedStringBuilder.shouldOpenLink(modifierFlags: event.modifierFlags),
+                  let url = LogTextAttributedStringBuilder.allowedLinkURL(from: link) else {
+                return true
+            }
+
+            NSWorkspace.shared.open(url)
+            return true
         }
 
         func handleScroll(_ scrollView: NSScrollView, userInitiated: Bool) {
@@ -952,6 +886,163 @@ private struct SelectableLogTextView: NSViewRepresentable {
             isProgrammaticScroll = false
             handleScroll(scrollView, userInitiated: false)
         }
+    }
+}
+
+@MainActor
+private final class LogTextView: NSTextView {
+    private var mouseTrackingArea: NSTrackingArea?
+    private var modifierMonitor: Any?
+    private var highlightedLinkRange: NSRange?
+    private var lastMouseLocation: NSPoint?
+    private var isMouseInside = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let mouseTrackingArea {
+            removeTrackingArea(mouseTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            owner: self
+        )
+        addTrackingArea(trackingArea)
+        mouseTrackingArea = trackingArea
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if window == nil {
+            removeModifierMonitor()
+            clearCommandLinkInteraction()
+        } else {
+            installModifierMonitorIfNeeded()
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isMouseInside = true
+        lastMouseLocation = convert(event.locationInWindow, from: nil)
+        updateCommandLinkInteraction(modifierFlags: event.modifierFlags)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        isMouseInside = true
+        lastMouseLocation = convert(event.locationInWindow, from: nil)
+        updateCommandLinkInteraction(modifierFlags: event.modifierFlags)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isMouseInside = false
+        lastMouseLocation = nil
+        clearCommandLinkInteraction()
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        updateCommandLinkInteraction(modifierFlags: event.modifierFlags)
+    }
+
+    func clearCommandLinkInteraction() {
+        updateHighlightedLinkRange(nil)
+        NSCursor.iBeam.set()
+    }
+
+    private func installModifierMonitorIfNeeded() {
+        guard modifierMonitor == nil else {
+            return
+        }
+
+        modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.updateCommandLinkInteraction(modifierFlags: event.modifierFlags)
+            return event
+        }
+    }
+
+    private func removeModifierMonitor() {
+        if let modifierMonitor {
+            NSEvent.removeMonitor(modifierMonitor)
+        }
+        modifierMonitor = nil
+    }
+
+    private func updateCommandLinkInteraction(modifierFlags: NSEvent.ModifierFlags) {
+        guard isMouseInside,
+              let lastMouseLocation,
+              LogTextAttributedStringBuilder.shouldOpenLink(modifierFlags: modifierFlags),
+              let linkRange = linkRange(at: lastMouseLocation) else {
+            clearCommandLinkInteraction()
+            return
+        }
+
+        updateHighlightedLinkRange(linkRange)
+        NSCursor.openHand.set()
+    }
+
+    private func updateHighlightedLinkRange(_ range: NSRange?) {
+        if highlightedLinkRange == range {
+            return
+        }
+
+        if let highlightedLinkRange {
+            layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: highlightedLinkRange)
+            layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: highlightedLinkRange)
+        }
+
+        highlightedLinkRange = range
+
+        if let range {
+            layoutManager?.addTemporaryAttributes(
+                LogTextAttributedStringBuilder.commandLinkHoverAttributes,
+                forCharacterRange: range
+            )
+        }
+    }
+
+    private func linkRange(at point: NSPoint) -> NSRange? {
+        guard let textContainer,
+              let layoutManager,
+              let textStorage,
+              !string.isEmpty else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else {
+            return nil
+        }
+
+        let glyphRange = NSRange(location: glyphIndex, length: 1)
+        let glyphBounds = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard glyphBounds.insetBy(dx: -2, dy: -3).contains(containerPoint) else {
+            return nil
+        }
+
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        guard characterIndex < textStorage.length else {
+            return nil
+        }
+
+        var effectiveRange = NSRange(location: NSNotFound, length: 0)
+        guard textStorage.attribute(.link, at: characterIndex, effectiveRange: &effectiveRange) != nil,
+              effectiveRange.location != NSNotFound else {
+            return nil
+        }
+
+        return effectiveRange
     }
 }
 
