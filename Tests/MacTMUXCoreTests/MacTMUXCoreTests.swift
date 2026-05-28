@@ -113,6 +113,92 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertTrue(output.contains("password: [REDACTED]"))
     }
 
+    func testDetectsHTTPLinksNewestFirst() {
+        let input = """
+        started at https://example.com/api
+        dev server http://localhost:3000/dashboard
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input)
+
+        XCTAssertEqual(links.map(\.urlString), [
+            "http://localhost:3000/dashboard",
+            "https://example.com/api"
+        ])
+    }
+
+    func testDetectsBareLocalhostAsHTTPLink() {
+        let links = LogLinkDetector.detectLinks(in: "ready on localhost:5173/app")
+
+        XCTAssertEqual(links.map(\.urlString), ["http://localhost:5173/app"])
+    }
+
+    func testTrimsTrailingPunctuationFromDetectedLinks() {
+        let links = LogLinkDetector.detectLinks(in: "open (https://example.com/path), then continue")
+
+        XCTAssertEqual(links.map(\.urlString), ["https://example.com/path"])
+    }
+
+    func testDeduplicatesDetectedLinksKeepingNewestOccurrence() {
+        let input = """
+        first https://example.com/a
+        second https://example.com/b
+        newest https://example.com/a
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input)
+
+        XCTAssertEqual(links.map(\.urlString), [
+            "https://example.com/a",
+            "https://example.com/b"
+        ])
+    }
+
+    func testRejectsUnsafeLinkSchemes() {
+        let input = "file:///tmp/a javascript:alert(1) data:text/plain,a ftp://example.com"
+
+        let links = LogLinkDetector.detectLinks(in: input)
+
+        XCTAssertTrue(links.isEmpty)
+    }
+
+    func testStripsTerminalControlsBeforeDetectingLinks() {
+        let input = "\u{001B}[32mhttps://example.com/ready\u{001B}[0m"
+
+        let links = LogLinkDetector.detectLinks(in: input)
+
+        XCTAssertEqual(links.map(\.urlString), ["https://example.com/ready"])
+    }
+
+    func testSkipsSecretBearingLinks() {
+        let input = """
+        https://example.com/callback?token=abc
+        https://example.com/callback?access_token=abc
+        https://example.com/callback?code=abc
+        https://example.com/callback?value=[REDACTED]
+        https://example.com/safe?state=ok
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input)
+
+        XCTAssertEqual(links.map(\.urlString), ["https://example.com/safe?state=ok"])
+    }
+
+    func testCapsDetectedLinks() {
+        let input = """
+        https://example.com/1
+        https://example.com/2
+        https://example.com/3
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input, maxCount: 2)
+
+        XCTAssertEqual(links.map(\.urlString), [
+            "https://example.com/3",
+            "https://example.com/2"
+        ])
+    }
+
     func testParsesProcessRecords() {
         let output = """
           100     1   0.0   1200

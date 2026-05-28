@@ -158,6 +158,8 @@ private struct MenuSessionRow: View {
             }
             .buttonStyle(.plain)
 
+            SessionLinksControl(links: store.recentLinks(for: session))
+
             Button {
                 Task {
                     await store.restart(session)

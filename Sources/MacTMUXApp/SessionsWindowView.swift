@@ -56,16 +56,15 @@ struct SessionsWindowView: View {
                     ForEach(store.sessions) { session in
                         SessionRow(
                             session: session,
-                            isSelected: selectedSessionIDs.contains(session.id)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
-                                toggleSessionSelection(session)
-                            } else {
-                                selectSession(session)
+                            isSelected: selectedSessionIDs.contains(session.id),
+                            onSelect: {
+                                if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                                    toggleSessionSelection(session)
+                                } else {
+                                    selectSession(session)
+                                }
                             }
-                        }
+                        )
                         .contextMenu {
                             Button("Open") {
                                 Task {
@@ -310,23 +309,34 @@ private struct SessionRow: View {
     @EnvironmentObject private var store: MacTMUXStore
     var session: TmuxSession
     var isSelected = false
+    var onSelect: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(session.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                if session.attached {
-                    Image(systemName: "link")
-                        .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(session.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    if session.attached {
+                        Image(systemName: "link")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            }
 
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(isSelected ? .white.opacity(0.82) : .secondary)
-                .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(isSelected ? .white.opacity(0.82) : .secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+
+            SessionLinksControl(
+                links: store.recentLinks(for: session),
+                isHighlighted: isSelected
+            )
         }
         .foregroundStyle(isSelected ? .white : .primary)
         .padding(.vertical, 4)

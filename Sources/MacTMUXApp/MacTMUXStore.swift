@@ -27,6 +27,7 @@ final class MacTMUXStore: ObservableObject {
 
     @Published private(set) var sessions: [TmuxSession] = []
     @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
+    @Published private(set) var recentLinksBySessionID: [String: [DetectedLogLink]] = [:]
     @Published private(set) var selectedSession: TmuxSession?
     @Published private(set) var logBuffer = LogBuffer(pageSize: 200)
     @Published private(set) var logRevision = 0
@@ -73,6 +74,10 @@ final class MacTMUXStore: ObservableObject {
 
     var logLines: [LogLine] {
         logBuffer.lines
+    }
+
+    func recentLinks(for session: TmuxSession) -> [DetectedLogLink] {
+        recentLinksBySessionID[session.id] ?? []
     }
 
     var canLoadOlderLogs: Bool {
@@ -155,6 +160,7 @@ final class MacTMUXStore: ObservableObject {
 
         guard let tmuxPath else {
             sessions = []
+            recentLinksBySessionID = [:]
             errorMessage = MacTMUXError.tmuxNotFound.localizedDescription
             DiagnosticLog.write("tmux path not found")
             return
@@ -162,6 +168,7 @@ final class MacTMUXStore: ObservableObject {
 
         guard TmuxPathResolver.isValidTmuxBinary(tmuxPath) else {
             sessions = []
+            recentLinksBySessionID = [:]
             errorMessage = MacTMUXError.invalidTmuxPath(tmuxPath).localizedDescription
             DiagnosticLog.write("invalid tmux path \(tmuxPath)")
             return
@@ -171,6 +178,7 @@ final class MacTMUXStore: ObservableObject {
             let loadedSessions = try await loadSessions(tmuxPath: tmuxPath)
             sessions = loadedSessions
             await loadResourceMetricsIfNeeded(for: loadedSessions)
+            await loadRecentLinks(for: loadedSessions)
             if let selectedSession {
                 if let refreshedSelection = loadedSessions.first(where: { $0.id == selectedSession.id }) {
                     self.selectedSession = refreshedSelection
@@ -182,6 +190,7 @@ final class MacTMUXStore: ObservableObject {
             errorMessage = nil
         } catch {
             sessions = []
+            recentLinksBySessionID = [:]
             errorMessage = readableMessage(error)
         }
     }
@@ -478,6 +487,50 @@ final class MacTMUXStore: ObservableObject {
             resourceMetricsBySessionID = [:]
             DiagnosticLog.write("metrics failed error=\(readableMessage(error))")
         }
+    }
+
+    private func loadRecentLinks(for sessions: [TmuxSession]) async {
+        let validSessionIDs = Set(sessions.map(\.id))
+        var nextLinksBySessionID = recentLinksBySessionID.filter { validSessionIDs.contains($0.key) }
+        guard !sessions.isEmpty else {
+            recentLinksBySessionID = [:]
+            return
+        }
+
+        let client = self.client
+        let pageSize = min(80, logBuffer.pageSize)
+        let capturedLinks = await withTaskGroup(of: (String, [DetectedLogLink]?).self) { group in
+            for session in sessions {
+                group.addTask {
+                    do {
+                        let output = try await client.captureLogs(session: session, startLine: -pageSize, endLine: -1)
+                        return (session.id, LogLinkDetector.detectLinks(in: output))
+                    } catch {
+                        DiagnosticLog.write("link capture failed session=\(session.name) error=\(error.localizedDescription)")
+                        return (session.id, nil)
+                    }
+                }
+            }
+
+            var linksBySessionID: [(String, [DetectedLogLink]?)] = []
+            for await result in group {
+                linksBySessionID.append(result)
+            }
+            return linksBySessionID
+        }
+
+        for (sessionID, links) in capturedLinks {
+            guard let links else {
+                continue
+            }
+            if links.isEmpty {
+                nextLinksBySessionID.removeValue(forKey: sessionID)
+            } else {
+                nextLinksBySessionID[sessionID] = links
+            }
+        }
+
+        recentLinksBySessionID = nextLinksBySessionID
     }
 
     private func confirm(title: String, message: String) -> Bool {
