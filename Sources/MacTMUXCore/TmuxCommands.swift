@@ -42,6 +42,45 @@ public enum TmuxCommands {
         )
     }
 
+    public static func listPanes(session: TmuxSession) -> CommandSpec {
+        CommandSpec(
+            executable: session.server.binaryPath,
+            arguments: serverArguments(for: session.server) + [
+                "list-panes",
+                "-s",
+                "-t",
+                session.name,
+                "-F",
+                [
+                    "#{pane_id}",
+                    "#{window_index}",
+                    "#{window_name}",
+                    "#{window_active}",
+                    "#{pane_index}",
+                    "#{pane_active}",
+                    "#{pane_pid}",
+                    "#{pane_current_command}"
+                ].joined(separator: ":::MACTMUX:::")
+            ]
+        )
+    }
+
+    public static func capturePane(pane: TmuxPane, startLine: Int, endLine: Int) -> CommandSpec {
+        CommandSpec(
+            executable: pane.server.binaryPath,
+            arguments: serverArguments(for: pane.server) + [
+                "capture-pane",
+                "-p",
+                "-S",
+                "\(startLine)",
+                "-E",
+                endLineArgument(endLine),
+                "-t",
+                pane.paneID
+            ]
+        )
+    }
+
     private static func endLineArgument(_ endLine: Int) -> String {
         endLine == -1 ? "-" : "\(endLine)"
     }

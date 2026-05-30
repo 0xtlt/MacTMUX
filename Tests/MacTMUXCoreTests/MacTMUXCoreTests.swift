@@ -41,6 +41,27 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(sessions[0].name, "api")
     }
 
+    func testParsesFormattedTmuxPanesSortedByWindowAndPane() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "api", windows: 2, attached: false, createdAt: .now)
+        let output = """
+        %3:::MACTMUX:::1:::MACTMUX:::queue:::MACTMUX:::1:::MACTMUX:::0:::MACTMUX:::1:::MACTMUX:::45521:::MACTMUX:::node
+        %2:::MACTMUX:::0:::MACTMUX:::dev:::MACTMUX:::0:::MACTMUX:::1:::MACTMUX:::0:::MACTMUX:::45520:::MACTMUX:::zsh
+        %1:::MACTMUX:::0:::MACTMUX:::dev:::MACTMUX:::0:::MACTMUX:::0:::MACTMUX:::1:::MACTMUX:::45519:::MACTMUX:::node
+        """
+
+        let panes = TmuxOutputParser.parsePanes(output, session: session)
+
+        XCTAssertEqual(panes.map(\.paneID), ["%1", "%2", "%3"])
+        XCTAssertEqual(panes[0].sessionID, session.id)
+        XCTAssertEqual(panes[0].displayName, "dev 0.0")
+        XCTAssertTrue(panes[0].paneActive)
+        XCTAssertEqual(panes[2].windowName, "queue")
+        XCTAssertTrue(panes[2].windowActive)
+        XCTAssertEqual(panes[2].panePID, 45521)
+        XCTAssertEqual(panes[2].currentCommand, "node")
+    }
+
     func testSortsSessionsByCreationDateDescendingWithNameFallback() {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let older = TmuxSession(server: server, name: "older", windows: 1, attached: false, createdAt: Date(timeIntervalSince1970: 10))
@@ -59,11 +80,13 @@ final class MacTMUXCoreTests: XCTestCase {
         let list = TmuxCommands.listSessions(server: server)
         let kill = TmuxCommands.killSession(session: session)
         let capture = TmuxCommands.capturePane(session: session, lines: 50)
+        let panes = TmuxCommands.listPanes(session: session)
 
         XCTAssertEqual(list.executable, "/opt/homebrew/bin/tmux")
         XCTAssertEqual(list.arguments.prefix(2), ["-L", "main"])
         XCTAssertEqual(kill.arguments.suffix(2), ["-t", "api; rm -rf /"])
         XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-", "-t", "api; rm -rf /"])
+        XCTAssertEqual(Array(panes.arguments.dropFirst(2).prefix(4)), ["list-panes", "-s", "-t", "api; rm -rf /"])
         XCTAssertFalse(kill.arguments.contains("sh"))
         XCTAssertFalse(kill.arguments.contains("-c"))
     }
@@ -75,6 +98,26 @@ final class MacTMUXCoreTests: XCTestCase {
         let capture = TmuxCommands.capturePane(session: session, startLine: -400, endLine: -201)
 
         XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-400", "-E", "-201", "-t", "api"])
+    }
+
+    func testBuildsCapturePaneWithPaneTarget() {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "api", windows: 1, attached: false, createdAt: .now)
+        let pane = TmuxPane(
+            server: server,
+            sessionName: session.name,
+            sessionID: session.id,
+            paneID: "%7",
+            windowIndex: 0,
+            windowName: "dev",
+            windowActive: true,
+            paneIndex: 0,
+            paneActive: true
+        )
+
+        let capture = TmuxCommands.capturePane(pane: pane, startLine: -80, endLine: -1)
+
+        XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-80", "-E", "-", "-t", "%7"])
     }
 
     func testValidatesTmuxBinaryPath() throws {

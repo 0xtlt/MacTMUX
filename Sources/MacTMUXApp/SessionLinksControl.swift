@@ -68,10 +68,36 @@ struct SessionLinksControl: View {
     }
 
     private func menuTitle(for link: DetectedLogLink) -> String {
-        let maximumLength = 30
-        guard link.displayText.count > maximumLength else {
-            return link.displayText
+        LinkMenuTitleFormatter.title(for: link.displayText)
+    }
+}
+
+enum LinkMenuTitleFormatter {
+    static let defaultMaximumLength = 30
+
+    static func title(for value: String, maximumLength: Int = defaultMaximumLength) -> String {
+        let displayValue = strippingHTTPScheme(from: value)
+        guard displayValue.count > maximumLength else {
+            return displayValue
         }
-        return "\(link.displayText.prefix(maximumLength - 3))..."
+        guard maximumLength > 3 else {
+            return String(displayValue.prefix(maximumLength))
+        }
+
+        let retainedLength = maximumLength - 3
+        let prefixLength = (retainedLength + 1) / 2
+        let suffixLength = retainedLength / 2
+        return "\(displayValue.prefix(prefixLength))...\(displayValue.suffix(suffixLength))"
+    }
+
+    private static func strippingHTTPScheme(from value: String) -> String {
+        let lowercased = value.lowercased()
+        if lowercased.hasPrefix("https://") {
+            return String(value.dropFirst("https://".count))
+        }
+        if lowercased.hasPrefix("http://") {
+            return String(value.dropFirst("http://".count))
+        }
+        return value
     }
 }

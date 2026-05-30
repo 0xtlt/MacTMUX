@@ -30,6 +30,25 @@ public actor TmuxClient {
         return SecretRedactor.redact(result.stdout)
     }
 
+    public func listPanes(session: TmuxSession) async throws -> [TmuxPane] {
+        let result = try await runner.run(TmuxCommands.listPanes(session: session))
+        if result.exitCode != 0 {
+            throw MacTMUXError.commandFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let parsedPanes = TmuxOutputParser.parsePanes(result.stdout, session: session)
+        DiagnosticLog.write("listPanes session=\(session.name) parsed=\(parsedPanes.count)")
+        return parsedPanes
+    }
+
+    public func captureLogs(pane: TmuxPane, startLine: Int = -200, endLine: Int = -1) async throws -> String {
+        let result = try await runner.run(TmuxCommands.capturePane(pane: pane, startLine: startLine, endLine: endLine))
+        if result.exitCode != 0 {
+            throw MacTMUXError.commandFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        DiagnosticLog.write("captureLogs pane=\(pane.paneID) bytes=\(result.stdout.utf8.count)")
+        return SecretRedactor.redact(result.stdout)
+    }
+
     public func stop(session: TmuxSession) async throws {
         let result = try await runner.run(TmuxCommands.killSession(session: session))
         if result.exitCode != 0 {

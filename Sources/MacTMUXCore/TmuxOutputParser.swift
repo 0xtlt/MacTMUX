@@ -38,15 +38,51 @@ public enum TmuxOutputParser {
         }
     }
 
+    public static func parsePanes(_ output: String, session: TmuxSession) -> [TmuxPane] {
+        output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> TmuxPane? in
+                let line = String(line)
+                let parts = splitFields(line, expectedCounts: [8])
+                guard parts.count == 8 else {
+                    DiagnosticLog.write("parse pane skipped parts=\(parts.count) lineBytes=\(line.utf8.count)")
+                    return nil
+                }
+                return TmuxPane(
+                    server: session.server,
+                    sessionName: session.name,
+                    sessionID: session.id,
+                    paneID: parts[0],
+                    windowIndex: Int(parts[1]) ?? 0,
+                    windowName: parts[2],
+                    windowActive: parts[3] == "1",
+                    paneIndex: Int(parts[4]) ?? 0,
+                    paneActive: parts[5] == "1",
+                    panePID: Int32(parts[6]),
+                    currentCommand: parts[7]
+                )
+            }
+            .sorted {
+                if $0.windowIndex == $1.windowIndex {
+                    return $0.paneIndex < $1.paneIndex
+                }
+                return $0.windowIndex < $1.windowIndex
+            }
+    }
+
     private static func splitFields(_ line: String) -> [String] {
+        splitFields(line, expectedCounts: [4, 5])
+    }
+
+    private static func splitFields(_ line: String, expectedCounts: Set<Int>) -> [String] {
         for separator in separators {
             let parts = line.components(separatedBy: separator)
-            if parts.count == 4 || parts.count == 5 {
+            if expectedCounts.contains(parts.count) {
                 return parts
             }
         }
         let whitespaceParts = line.split(whereSeparator: \.isWhitespace).map(String.init)
-        if whitespaceParts.count == 4 || whitespaceParts.count == 5 {
+        if expectedCounts.contains(whitespaceParts.count) {
             return whitespaceParts
         }
         return [line]

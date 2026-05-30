@@ -382,6 +382,8 @@ private struct SessionDetailView: View {
 
                 Spacer()
 
+                SessionLinksControl(links: store.recentLinks(for: session))
+
                 Button("Open", systemImage: "terminal") {
                     Task {
                         await store.open(session)
@@ -472,6 +474,10 @@ private struct LogOutputView: View {
             filterCriteria = LogFilterCriteria()
             reviseLogs(.sessionChanged)
         }
+        .onChange(of: store.selectedPane?.id) { _, _ in
+            didInitialBottomScroll = false
+            reviseLogs(.sessionChanged)
+        }
         .onChange(of: filterCriteria) { _, _ in
             reviseLogs(.filterChanged)
         }
@@ -483,6 +489,8 @@ private struct LogOutputView: View {
 
     private var filterControls: some View {
         VStack(alignment: .leading, spacing: 8) {
+            paneSelector
+
             HStack(spacing: 8) {
                 TextField("Search logs", text: $filterCriteria.query)
                     .textFieldStyle(.roundedBorder)
@@ -531,6 +539,37 @@ private struct LogOutputView: View {
         }
     }
 
+    private var paneSelector: some View {
+        let panes = store.panes(for: session)
+        return HStack(spacing: 8) {
+            if panes.count > 1 {
+                Picker("Pane", selection: Binding(
+                    get: { store.selectedPane?.id ?? "" },
+                    set: { paneID in
+                        guard let pane = panes.first(where: { $0.id == paneID }) else {
+                            return
+                        }
+                        Task {
+                            await store.selectPane(pane, for: session)
+                        }
+                    }
+                )) {
+                    ForEach(panes) { pane in
+                        Text(panePickerTitle(for: pane))
+                            .tag(pane.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 320, alignment: .leading)
+            } else if let pane = panes.first {
+                Label(panePickerTitle(for: pane), systemImage: "rectangle.split.1x2")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var emptyState: some View {
         Text(emptyStateText)
             .font(.system(.body, design: .monospaced))
@@ -540,7 +579,13 @@ private struct LogOutputView: View {
 
     private var emptyStateText: String {
         if store.logLines.isEmpty {
-            return store.isLoadingSelectedInitialLogs ? "Loading logs..." : "No logs captured yet"
+            if store.isLoadingSelectedInitialLogs {
+                return "Loading logs..."
+            }
+            if let pane = store.selectedPane {
+                return "No logs captured for \(pane.displayName) yet"
+            }
+            return "No panes found for this session"
         }
         return "No matching logs"
     }
@@ -589,6 +634,13 @@ private struct LogOutputView: View {
         } else {
             filterCriteria.enabledLevels.insert(level)
         }
+    }
+
+    private func panePickerTitle(for pane: TmuxPane) -> String {
+        if pane.currentCommand.isEmpty {
+            return pane.displayName
+        }
+        return "\(pane.displayName) · \(pane.currentCommand)"
     }
 }
 

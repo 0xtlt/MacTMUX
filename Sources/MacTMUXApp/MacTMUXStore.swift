@@ -4,7 +4,9 @@ import SwiftUI
 
 protocol TmuxClientProviding: Sendable {
     func listSessions(server: TmuxServer) async throws -> [TmuxSession]
+    func listPanes(session: TmuxSession) async throws -> [TmuxPane]
     func captureLogs(session: TmuxSession, startLine: Int, endLine: Int) async throws -> String
+    func captureLogs(pane: TmuxPane, startLine: Int, endLine: Int) async throws -> String
     func stop(session: TmuxSession) async throws
     func restartActivePane(session: TmuxSession) async throws
 }
@@ -28,6 +30,8 @@ final class MacTMUXStore: ObservableObject {
     @Published private(set) var sessions: [TmuxSession] = []
     @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
     @Published private(set) var recentLinksBySessionID: [String: [DetectedLogLink]] = [:]
+    @Published private(set) var panesBySessionID: [String: [TmuxPane]] = [:]
+    @Published private(set) var selectedPaneBySessionID: [String: TmuxPane] = [:]
     @Published private(set) var selectedSession: TmuxSession?
     @Published private(set) var logBuffer = LogBuffer(pageSize: 200)
     @Published private(set) var logRevision = 0
@@ -76,8 +80,19 @@ final class MacTMUXStore: ObservableObject {
         logBuffer.lines
     }
 
+    var selectedPane: TmuxPane? {
+        guard let selectedSession else {
+            return nil
+        }
+        return selectedPaneBySessionID[selectedSession.id]
+    }
+
     func recentLinks(for session: TmuxSession) -> [DetectedLogLink] {
         recentLinksBySessionID[session.id] ?? []
+    }
+
+    func panes(for session: TmuxSession) -> [TmuxPane] {
+        panesBySessionID[session.id] ?? []
     }
 
     var canLoadOlderLogs: Bool {
@@ -161,6 +176,8 @@ final class MacTMUXStore: ObservableObject {
         guard let tmuxPath else {
             sessions = []
             recentLinksBySessionID = [:]
+            panesBySessionID = [:]
+            selectedPaneBySessionID = [:]
             errorMessage = MacTMUXError.tmuxNotFound.localizedDescription
             DiagnosticLog.write("tmux path not found")
             return
@@ -169,6 +186,8 @@ final class MacTMUXStore: ObservableObject {
         guard TmuxPathResolver.isValidTmuxBinary(tmuxPath) else {
             sessions = []
             recentLinksBySessionID = [:]
+            panesBySessionID = [:]
+            selectedPaneBySessionID = [:]
             errorMessage = MacTMUXError.invalidTmuxPath(tmuxPath).localizedDescription
             DiagnosticLog.write("invalid tmux path \(tmuxPath)")
             return
@@ -177,11 +196,13 @@ final class MacTMUXStore: ObservableObject {
         do {
             let loadedSessions = try await loadSessions(tmuxPath: tmuxPath)
             sessions = loadedSessions
+            await loadPanes(for: loadedSessions)
             await loadResourceMetricsIfNeeded(for: loadedSessions)
             await loadRecentLinks(for: loadedSessions)
             if let selectedSession {
                 if let refreshedSelection = loadedSessions.first(where: { $0.id == selectedSession.id }) {
                     self.selectedSession = refreshedSelection
+                    selectDefaultPaneIfNeeded(for: refreshedSelection)
                 } else {
                     self.selectedSession = nil
                     clearLogs()
@@ -191,6 +212,8 @@ final class MacTMUXStore: ObservableObject {
         } catch {
             sessions = []
             recentLinksBySessionID = [:]
+            panesBySessionID = [:]
+            selectedPaneBySessionID = [:]
             errorMessage = readableMessage(error)
         }
     }
@@ -206,6 +229,20 @@ final class MacTMUXStore: ObservableObject {
 
     func select(_ session: TmuxSession) async {
         if selectedSession?.id != session.id {
+            clearLogs()
+        }
+        selectedSession = session
+        await loadPanesIfNeeded(for: session)
+        selectDefaultPaneIfNeeded(for: session)
+        await loadInitialLogs(for: session)
+    }
+
+    func selectPane(_ pane: TmuxPane, for session: TmuxSession) async {
+        guard pane.sessionID == session.id else {
+            return
+        }
+        if selectedPaneBySessionID[session.id]?.id != pane.id {
+            selectedPaneBySessionID[session.id] = pane
             clearLogs()
         }
         selectedSession = session
@@ -226,10 +263,14 @@ final class MacTMUXStore: ObservableObject {
         }
 
         do {
-            let output = try await client.captureLogs(session: session, startLine: -logBuffer.pageSize, endLine: -1)
+            guard let pane = selectedPane(for: session) else {
+                clearLogs()
+                return
+            }
+            let output = try await client.captureLogs(pane: pane, startLine: -logBuffer.pageSize, endLine: -1)
             var nextBuffer = LogBuffer(pageSize: logBuffer.pageSize, maxRetainedLines: logBuffer.maxRetainedLines)
             _ = nextBuffer.reset(with: output)
-            guard selectedSession?.id == session.id else {
+            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
                 return
             }
             logBuffer = nextBuffer
@@ -254,10 +295,13 @@ final class MacTMUXStore: ObservableObject {
         }
 
         do {
-            let output = try await client.captureLogs(session: session, startLine: -logBuffer.pageSize, endLine: -1)
+            guard let pane = selectedPane(for: session) else {
+                return
+            }
+            let output = try await client.captureLogs(pane: pane, startLine: -logBuffer.pageSize, endLine: -1)
             var nextBuffer = logBuffer
             let result = nextBuffer.appendLatest(output)
-            guard selectedSession?.id == session.id else {
+            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
                 return
             }
             if result.changed {
@@ -285,10 +329,13 @@ final class MacTMUXStore: ObservableObject {
         let endLine = -(loadedLines + 1)
 
         do {
-            let output = try await client.captureLogs(session: session, startLine: startLine, endLine: endLine)
+            guard let pane = selectedPane(for: session) else {
+                return
+            }
+            let output = try await client.captureLogs(pane: pane, startLine: startLine, endLine: endLine)
             var nextBuffer = logBuffer
             let result = nextBuffer.prependOlder(output)
-            guard selectedSession?.id == session.id else {
+            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
                 return
             }
             if result.changed {
@@ -456,6 +503,80 @@ final class MacTMUXStore: ObservableObject {
         return []
     }
 
+    private func loadPanes(for sessions: [TmuxSession]) async {
+        let validSessionIDs = Set(sessions.map(\.id))
+        var nextPanesBySessionID = panesBySessionID.filter { validSessionIDs.contains($0.key) }
+        var nextSelectedPaneBySessionID = selectedPaneBySessionID.filter { validSessionIDs.contains($0.key) }
+
+        guard !sessions.isEmpty else {
+            panesBySessionID = [:]
+            selectedPaneBySessionID = [:]
+            return
+        }
+
+        let client = self.client
+        let loadedPanes = await withTaskGroup(of: (TmuxSession, [TmuxPane]?).self) { group in
+            for session in sessions {
+                group.addTask {
+                    do {
+                        return (session, try await client.listPanes(session: session))
+                    } catch {
+                        DiagnosticLog.write("list panes failed session=\(session.name) error=\(error.localizedDescription)")
+                        return (session, nil)
+                    }
+                }
+            }
+
+            var result: [(TmuxSession, [TmuxPane]?)] = []
+            for await panes in group {
+                result.append(panes)
+            }
+            return result
+        }
+
+        for (session, panes) in loadedPanes {
+            guard let panes else {
+                continue
+            }
+
+            nextPanesBySessionID[session.id] = panes
+            if let selectedPane = nextSelectedPaneBySessionID[session.id],
+               let refreshedPane = panes.first(where: { $0.id == selectedPane.id }) {
+                nextSelectedPaneBySessionID[session.id] = refreshedPane
+            } else {
+                nextSelectedPaneBySessionID[session.id] = panes.first
+            }
+        }
+
+        panesBySessionID = nextPanesBySessionID
+        selectedPaneBySessionID = nextSelectedPaneBySessionID
+    }
+
+    private func loadPanesIfNeeded(for session: TmuxSession) async {
+        guard panesBySessionID[session.id]?.isEmpty != false else {
+            return
+        }
+
+        do {
+            let panes = try await client.listPanes(session: session)
+            panesBySessionID[session.id] = panes
+            selectedPaneBySessionID[session.id] = panes.first
+        } catch {
+            panesBySessionID[session.id] = []
+            selectedPaneBySessionID.removeValue(forKey: session.id)
+            DiagnosticLog.write("list panes failed session=\(session.name) error=\(readableMessage(error))")
+        }
+    }
+
+    private func selectDefaultPaneIfNeeded(for session: TmuxSession) {
+        let panes = panesBySessionID[session.id] ?? []
+        if let selectedPane = selectedPaneBySessionID[session.id],
+           panes.contains(where: { $0.id == selectedPane.id }) {
+            return
+        }
+        selectedPaneBySessionID[session.id] = panes.first
+    }
+
     private func loadResourceMetricsIfNeeded(for sessions: [TmuxSession]) async {
         guard showResourceMetrics else {
             resourceMetricsBySessionID = [:]
@@ -501,9 +622,17 @@ final class MacTMUXStore: ObservableObject {
         let pageSize = min(80, logBuffer.pageSize)
         let capturedLinks = await withTaskGroup(of: (String, [DetectedLogLink]?).self) { group in
             for session in sessions {
+                let panes = panesBySessionID[session.id] ?? []
                 group.addTask {
+                    guard !panes.isEmpty else {
+                        return (session.id, [])
+                    }
                     do {
-                        let output = try await client.captureLogs(session: session, startLine: -pageSize, endLine: -1)
+                        var output = ""
+                        for pane in panes {
+                            output += try await client.captureLogs(pane: pane, startLine: -pageSize, endLine: -1)
+                            output += "\n"
+                        }
                         return (session.id, LogLinkDetector.detectLinks(in: output))
                     } catch {
                         DiagnosticLog.write("link capture failed session=\(session.name) error=\(error.localizedDescription)")
@@ -531,6 +660,13 @@ final class MacTMUXStore: ObservableObject {
         }
 
         recentLinksBySessionID = nextLinksBySessionID
+    }
+
+    private func selectedPane(for session: TmuxSession) -> TmuxPane? {
+        if let pane = selectedPaneBySessionID[session.id] {
+            return pane
+        }
+        return panesBySessionID[session.id]?.first
     }
 
     private func confirm(title: String, message: String) -> Bool {

@@ -39,6 +39,60 @@ public struct TmuxSession: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+public struct TmuxPane: Identifiable, Hashable, Codable, Sendable {
+    public var server: TmuxServer
+    public var sessionName: String
+    public var sessionID: String
+    public var paneID: String
+    public var windowIndex: Int
+    public var windowName: String
+    public var windowActive: Bool
+    public var paneIndex: Int
+    public var paneActive: Bool
+    public var panePID: Int32?
+    public var currentCommand: String
+
+    public var id: String {
+        [
+            server.binaryPath,
+            server.socketName ?? "",
+            server.socketPath ?? "",
+            paneID
+        ].joined(separator: "\u{1F}")
+    }
+
+    public var displayName: String {
+        let window = windowName.isEmpty ? "Window \(windowIndex)" : windowName
+        return "\(window) \(windowIndex).\(paneIndex)"
+    }
+
+    public init(
+        server: TmuxServer,
+        sessionName: String,
+        sessionID: String,
+        paneID: String,
+        windowIndex: Int,
+        windowName: String,
+        windowActive: Bool,
+        paneIndex: Int,
+        paneActive: Bool,
+        panePID: Int32? = nil,
+        currentCommand: String = ""
+    ) {
+        self.server = server
+        self.sessionName = sessionName
+        self.sessionID = sessionID
+        self.paneID = paneID
+        self.windowIndex = windowIndex
+        self.windowName = windowName
+        self.windowActive = windowActive
+        self.paneIndex = paneIndex
+        self.paneActive = paneActive
+        self.panePID = panePID
+        self.currentCommand = currentCommand
+    }
+}
+
 public struct ProcessResourceMetrics: Equatable, Codable, Sendable {
     public var cpuPercent: Double
     public var residentMemoryBytes: Int64
