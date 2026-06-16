@@ -3,39 +3,104 @@ import SwiftUI
 
 @main
 struct MacTMUXApp: App {
-    @NSApplicationDelegateAdaptor(MacTMUXAppDelegate.self) private var appDelegate
+    @NSApplicationDelegateAdaptor(MacTMUXApplicationDelegate.self) private var applicationDelegate
+    @AppStorage("showMenuBarSessionCount") private var showMenuBarSessionCount = true
+    @StateObject private var store = MacTMUXStore()
 
     var body: some Scene {
+        MenuBarExtra {
+            MenuBarContentView()
+                .environmentObject(store)
+        } label: {
+            MenuBarStatusLabel(sessionCount: store.sessions.count, showsSessionCount: showMenuBarSessionCount)
+                .background {
+                    SessionsWindowOpenRequestHandler(store: store)
+                }
+        }
+        .menuBarExtraStyle(.menu)
+
+        Window("MacTMUX Sessions", id: MacTMUXWindowID.sessions) {
+            SessionsWindowView()
+                .environmentObject(store)
+                .frame(minWidth: 780, minHeight: 480)
+        }
+        .defaultSize(width: 840, height: 560)
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified(showsTitle: false))
+
         Settings {
-            EmptyView()
+            SettingsView()
+                .environmentObject(store)
         }
     }
 }
 
-@MainActor
-final class MacTMUXAppDelegate: NSObject, NSApplicationDelegate {
-    static private(set) weak var shared: MacTMUXAppDelegate?
+enum MacTMUXWindowID {
+    static let sessions = "sessions"
+}
 
-    private let store = MacTMUXStore()
-    private var statusBarController: StatusBarController?
-    private var isExplicitFullQuitRequested = false
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        Self.shared = self
-        statusBarController = StatusBarController(store: store)
-    }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard isExplicitFullQuitRequested else {
-            AppWindowPresenter.shared.closeUserWindowsAndReturnToMenuBar()
-            return .terminateCancel
+final class MacTMUXApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if AppActivationController.hasVisibleUserWindow {
+            AppActivationController.presentUserWindow()
+        } else {
+            AppActivationController.requestSessionsWindow()
         }
 
-        return .terminateNow
+        return false
+    }
+}
+
+private struct MenuBarStatusLabel: View {
+    var sessionCount: Int
+    var showsSessionCount: Bool
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: "terminal")
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 26, height: 20)
+
+            if let badgeText = StatusBarBadgeFormatter.badgeText(
+                sessionCount: sessionCount,
+                showsSessionCount: showsSessionCount
+            ) {
+                Text(badgeText)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, badgeText.count > 1 ? 4 : 3)
+                    .frame(minWidth: 13, minHeight: 13)
+                    .background(.red, in: Capsule())
+                    .offset(x: 5, y: -5)
+            }
+        }
+        .frame(width: 30, height: 22)
+        .help(StatusBarBadgeFormatter.toolTip(sessionCount: sessionCount))
+        .accessibilityLabel(StatusBarBadgeFormatter.toolTip(sessionCount: sessionCount))
+    }
+}
+
+private struct SessionsWindowOpenRequestHandler: View {
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var store: MacTMUXStore
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onReceive(NotificationCenter.default.publisher(for: AppActivationController.openSessionsWindowNotification)) { _ in
+                openSessionsWindow()
+            }
     }
 
-    func requestFullQuit() {
-        isExplicitFullQuitRequested = true
-        NSApplication.shared.terminate(nil)
+    private func openSessionsWindow() {
+        AppActivationController.presentUserWindow()
+        Task {
+            await store.refresh()
+            openWindow(id: MacTMUXWindowID.sessions)
+            AppActivationController.presentUserWindow()
+        }
     }
 }

@@ -176,6 +176,39 @@ final class MacTMUXCoreTests: XCTestCase {
         XCTAssertEqual(links.map(\.urlString), ["http://localhost:5173/app"])
     }
 
+    func testDoesNotDetectRequestPathsWithoutBaseURL() {
+        let links = LogLinkDetector.detectLinks(in: "15:48:03 Request » GET 200 /collections/news")
+
+        XCTAssertTrue(links.isEmpty)
+    }
+
+    func testDetectsRequestPathsWithBaseURL() throws {
+        let baseURL = try XCTUnwrap(URL(string: "http://localhost:9292"))
+        let input = """
+        15:48:03 Request » GET 200 /collections/news
+        15:48:04 Request » GET 404 /products/le-faitout
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input, baseURL: baseURL)
+
+        XCTAssertEqual(links.map(\.urlString), [
+            "http://localhost:9292/products/le-faitout",
+            "http://localhost:9292/collections/news"
+        ])
+    }
+
+    func testSkipsSecretBearingRequestPathLinks() throws {
+        let baseURL = try XCTUnwrap(URL(string: "http://localhost:9292"))
+        let input = """
+        GET 200 /callback?token=abc
+        GET 200 /safe?state=ok
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input, baseURL: baseURL)
+
+        XCTAssertEqual(links.map(\.urlString), ["http://localhost:9292/safe?state=ok"])
+    }
+
     func testTrimsTrailingPunctuationFromDetectedLinks() {
         let links = LogLinkDetector.detectLinks(in: "open (https://example.com/path), then continue")
 

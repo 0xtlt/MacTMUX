@@ -13,6 +13,12 @@ final class StatusBarBadgeFormatterTests: XCTestCase {
         XCTAssertEqual(StatusBarBadgeFormatter.badgeText(sessionCount: 42), "9+")
     }
 
+    func testOptionalBadgeTextRespectsVisibilitySetting() {
+        XCTAssertNil(StatusBarBadgeFormatter.badgeText(sessionCount: 0, showsSessionCount: true))
+        XCTAssertEqual(StatusBarBadgeFormatter.badgeText(sessionCount: 3, showsSessionCount: true), "3")
+        XCTAssertNil(StatusBarBadgeFormatter.badgeText(sessionCount: 3, showsSessionCount: false))
+    }
+
     func testToolTipMatchesBadgeBehavior() {
         XCTAssertEqual(StatusBarBadgeFormatter.toolTip(sessionCount: 0), "MacTMUX")
         XCTAssertEqual(StatusBarBadgeFormatter.toolTip(sessionCount: 1), "MacTMUX - 1 tmux session")

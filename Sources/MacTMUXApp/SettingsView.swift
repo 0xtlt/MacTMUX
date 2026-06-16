@@ -1,122 +1,163 @@
 import MacTMUXCore
-import AppKit
 import SwiftUI
 
 struct SettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: MacTMUXStore
+    @AppStorage("showMenuBarSessionCount") private var showMenuBarSessionCount = true
     @StateObject private var launchAtLogin = LaunchAtLoginController()
 
     var body: some View {
-        ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Settings")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text("MacTMUX")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        TabView {
+            Form {
+                startupSection
+                menuBarSection
+                refreshSection
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("General", systemImage: "gearshape")
             }
 
-            SettingsSection(title: "Startup") {
-                Toggle("Launch at login", isOn: Binding(
-                    get: { launchAtLogin.isEnabled },
-                    set: { launchAtLogin.setEnabled($0) }
-                ))
-                .disabled(launchAtLogin.isUnavailable)
-
-                Text(launchAtLogin.statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let errorMessage = launchAtLogin.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                if launchAtLogin.shouldShowLoginItemsButton {
-                    Button("Open Login Items Settings") {
-                        launchAtLogin.openLoginItemsSettings()
-                    }
-                }
+            Form {
+                terminalSection
+                tmuxSection
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Terminal", systemImage: "terminal")
             }
 
-            SettingsSection(title: "Terminal") {
-                Picker("Default terminal", selection: Binding(
-                    get: { store.terminalKind },
-                    set: { store.terminalKind = $0 }
-                )) {
-                    ForEach(TerminalKind.allCases) { terminal in
-                        Text(terminalLabel(terminal))
-                            .tag(terminal)
-                    }
-                }
-                .pickerStyle(.menu)
-
-                Text(terminalHelp)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Form {
+                logsSection
+                safetySection
             }
-
-            SettingsSection(title: "tmux") {
-                TextField("tmux binary path", text: Binding(
-                    get: { store.tmuxPathSetting },
-                    set: { store.tmuxPathSetting = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-
-                HStack {
-                    Button("Use autodetect") {
-                        store.resetTmuxPathToAutodetect()
-                    }
-
-                    Spacer()
-
-                    Text(store.tmuxPath ?? "Not found")
-                        .foregroundStyle(.secondary)
-                }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Logs", systemImage: "doc.text.magnifyingglass")
             }
-
-            SettingsSection(title: "Refresh") {
-                Stepper(value: $store.refreshInterval, in: 2...60, step: 1) {
-                    Text("Refresh interval: \(Int(store.refreshInterval))s")
-                }
-
-                Toggle("Show CPU and RAM", isOn: Binding(
-                    get: { store.showResourceMetrics },
-                    set: { store.showResourceMetrics = $0 }
-                ))
-
-                Toggle("Auto-refresh selected logs", isOn: Binding(
-                    get: { store.autoRefreshLogs },
-                    set: { store.autoRefreshLogs = $0 }
-                ))
-
-                Text("CPU/RAM uses one lightweight ps sample per refresh. Logs auto-refresh only for the selected session.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            SettingsSection(title: "Safety") {
-                Toggle("Always confirm stop and restart", isOn: .constant(true))
-                    .disabled(true)
-
-                Text("Logs are displayed in memory only and common secrets are redacted.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
         }
-        .padding(20)
-        }
-        .frame(width: 480)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: 520, height: 340)
+        .scenePadding()
         .onAppear {
             launchAtLogin.refresh()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            launchAtLogin.refresh()
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                launchAtLogin.refresh()
+            }
+        }
+    }
+
+    private var startupSection: some View {
+        Section("Startup") {
+            Toggle("Launch at login", isOn: Binding(
+                get: { launchAtLogin.isEnabled },
+                set: { launchAtLogin.setEnabled($0) }
+            ))
+            .disabled(launchAtLogin.isUnavailable)
+
+            Text(launchAtLogin.statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let errorMessage = launchAtLogin.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if launchAtLogin.shouldShowLoginItemsButton {
+                Button("Open Login Items Settings") {
+                    launchAtLogin.openLoginItemsSettings()
+                }
+            }
+        }
+    }
+
+    private var refreshSection: some View {
+        Section("Refresh") {
+            Stepper(value: $store.refreshInterval, in: 2...60, step: 1) {
+                Text("Refresh interval: \(Int(store.refreshInterval))s")
+            }
+
+            Toggle("Show CPU and RAM", isOn: Binding(
+                get: { store.showResourceMetrics },
+                set: { store.showResourceMetrics = $0 }
+            ))
+        }
+    }
+
+    private var menuBarSection: some View {
+        Section("Menu bar") {
+            Toggle("Show session count", isOn: $showMenuBarSessionCount)
+        }
+    }
+
+    private var terminalSection: some View {
+        Section("Default terminal") {
+            Picker("Terminal", selection: Binding(
+                get: { store.terminalKind },
+                set: { store.terminalKind = $0 }
+            )) {
+                ForEach(TerminalKind.allCases) { terminal in
+                    Text(terminalLabel(terminal))
+                        .tag(terminal)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(terminalHelp)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var tmuxSection: some View {
+        Section("tmux") {
+            TextField("Binary path", text: Binding(
+                get: { store.tmuxPathSetting },
+                set: { store.tmuxPathSetting = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Button("Use Autodetect") {
+                    store.resetTmuxPathToAutodetect()
+                }
+
+                Spacer()
+
+                Text(store.tmuxPath ?? "Not found")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var logsSection: some View {
+        Section("Logs") {
+            Toggle("Auto-refresh selected logs", isOn: Binding(
+                get: { store.autoRefreshLogs },
+                set: { store.autoRefreshLogs = $0 }
+            ))
+
+            Text("Logs are displayed in memory. Common secrets are redacted before rendering.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var safetySection: some View {
+        Section("Safety") {
+            Toggle("Always confirm stop and restart", isOn: .constant(true))
+                .disabled(true)
+
+            Text("Session stop and restart actions stay explicit from the menu bar and the main window.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -138,28 +179,4 @@ struct SettingsView: View {
             return "Uses cmux CLI new-workspace --command. cmux automation/socket access must allow MacTMUX."
         }
     }
-}
-
-private struct SettingsSection<Content: View>: View {
-    var title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.primary.opacity(0.07))
-            )
-        }
-    }
-
 }

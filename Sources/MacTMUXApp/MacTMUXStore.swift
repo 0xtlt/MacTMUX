@@ -1,4 +1,3 @@
-import AppKit
 import MacTMUXCore
 import SwiftUI
 
@@ -39,6 +38,7 @@ final class MacTMUXStore: ObservableObject {
     @Published private(set) var isLoadingInitialLogs = false
     @Published private(set) var isRefreshingLogs = false
     @Published private(set) var isLoadingOlderLogs = false
+    @Published private(set) var isMenuBarMenuPresented = false
     @Published var errorMessage: String?
 
     private let client: any TmuxClientProviding
@@ -46,6 +46,7 @@ final class MacTMUXStore: ObservableObject {
     private var refreshLoopStarted = false
     private var logRefreshLoopStarted = false
     private var loadingInitialLogSessionIDs = Set<String>()
+    private var logLinkScanCache = LogLinkScanCache()
 
     init(
         client: any TmuxClientProviding = TmuxClient(),
@@ -208,6 +209,9 @@ final class MacTMUXStore: ObservableObject {
                     clearLogs()
                 }
             }
+            if let selectedSession, let pane = selectedPane(for: selectedSession) {
+                updateCurrentLogLinks(for: selectedSession, pane: pane)
+            }
             errorMessage = nil
         } catch {
             sessions = []
@@ -275,6 +279,7 @@ final class MacTMUXStore: ObservableObject {
             }
             logBuffer = nextBuffer
             logRevision += 1
+            updateCurrentLogLinks(for: session, pane: pane, resetCache: true)
             errorMessage = nil
         } catch {
             guard selectedSession?.id == session.id else {
@@ -307,6 +312,7 @@ final class MacTMUXStore: ObservableObject {
             if result.changed {
                 logBuffer = nextBuffer
                 logRevision += 1
+                updateCurrentLogLinks(for: session, pane: pane, resetCache: result.replaced)
             }
             errorMessage = nil
         } catch {
@@ -341,6 +347,7 @@ final class MacTMUXStore: ObservableObject {
             if result.changed {
                 logBuffer = nextBuffer
                 logRevision += 1
+                updateCurrentLogLinks(for: session, pane: pane)
             } else {
                 logBuffer = nextBuffer
             }
@@ -351,10 +358,6 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func stop(_ session: TmuxSession) async {
-        guard confirm(title: "Stop \(session.name)?", message: "This will kill the selected tmux session.") else {
-            return
-        }
-
         do {
             try await client.stop(session: session)
             await refresh()
@@ -367,13 +370,6 @@ final class MacTMUXStore: ObservableObject {
     func stopSessions(_ sessions: [TmuxSession]) async -> Set<String> {
         let sessionsToStop = uniqueSessions(sessions)
         guard !sessionsToStop.isEmpty else {
-            return []
-        }
-
-        let title = sessionsToStop.count == 1
-            ? "Stop \(sessionsToStop[0].name)?"
-            : "Stop \(sessionsToStop.count) sessions?"
-        guard confirm(title: title, message: bulkStopMessage(for: sessionsToStop)) else {
             return []
         }
 
@@ -398,10 +394,6 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func restart(_ session: TmuxSession) async {
-        guard confirm(title: "Restart \(session.name)?", message: "This will respawn the active pane in the selected tmux session.") else {
-            return
-        }
-
         do {
             try await client.restartActivePane(session: session)
             await refreshLatestLogs(for: session)
@@ -438,6 +430,9 @@ final class MacTMUXStore: ObservableObject {
         while !Task.isCancelled {
             let seconds = max(2.0, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
+            guard !isMenuBarMenuPresented else {
+                continue
+            }
             await refresh()
         }
     }
@@ -453,11 +448,15 @@ final class MacTMUXStore: ObservableObject {
         while !Task.isCancelled {
             let seconds = max(2.0, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
-            guard autoRefreshLogs, let selectedSession else {
+            guard autoRefreshLogs, !isMenuBarMenuPresented, let selectedSession else {
                 continue
             }
             await refreshLatestLogs(for: selectedSession)
         }
+    }
+
+    func setMenuBarMenuPresented(_ isPresented: Bool) {
+        isMenuBarMenuPresented = isPresented
     }
 
     private func defaultSocketPath() -> String? {
@@ -669,31 +668,11 @@ final class MacTMUXStore: ObservableObject {
         return panesBySessionID[session.id]?.first
     }
 
-    private func confirm(title: String, message: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Confirm")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
     private func uniqueSessions(_ sessions: [TmuxSession]) -> [TmuxSession] {
         var seenIDs = Set<String>()
         return sessions.filter { session in
             seenIDs.insert(session.id).inserted
         }
-    }
-
-    private func bulkStopMessage(for sessions: [TmuxSession]) -> String {
-        let prefix = sessions.count == 1
-            ? "This will kill the selected tmux session."
-            : "This will kill the selected tmux sessions."
-        let shownNames = sessions.prefix(8).map { "- \($0.name)" }.joined(separator: "\n")
-        let remainingCount = sessions.count - 8
-        let remainingText = remainingCount > 0 ? "\nand \(remainingCount) more." : ""
-        return "\(prefix)\n\n\(shownNames)\(remainingText)"
     }
 
     private func bulkStopFailureMessage(_ failures: [String]) -> String {
@@ -720,7 +699,26 @@ final class MacTMUXStore: ObservableObject {
         var nextBuffer = logBuffer
         nextBuffer.clear()
         logBuffer = nextBuffer
+        logLinkScanCache.reset()
         logRevision += 1
+    }
+
+    private func updateCurrentLogLinks(for session: TmuxSession, pane: TmuxPane, resetCache: Bool = false) {
+        let contextID = "\(session.id)|\(pane.id)"
+        if resetCache {
+            logLinkScanCache.reset(contextID: contextID)
+        }
+
+        let links = logLinkScanCache.update(contextID: contextID, lines: logBuffer.lines)
+        let mergedLinks = mergedRecentLinks(
+            selectedPaneLinks: links,
+            sessionLinks: recentLinksBySessionID[session.id] ?? []
+        )
+        if mergedLinks.isEmpty {
+            recentLinksBySessionID.removeValue(forKey: session.id)
+        } else {
+            recentLinksBySessionID[session.id] = mergedLinks
+        }
     }
 
     private func readableMessage(_ error: Error) -> String {
@@ -728,5 +726,133 @@ final class MacTMUXStore: ObservableObject {
             return description.isEmpty ? "Unknown error." : description
         }
         return error.localizedDescription
+    }
+
+    private func mergedRecentLinks(
+        selectedPaneLinks: [DetectedLogLink],
+        sessionLinks: [DetectedLogLink]
+    ) -> [DetectedLogLink] {
+        var merged: [DetectedLogLink] = []
+        var seenURLStrings = Set<String>()
+
+        for link in selectedPaneLinks + sessionLinks where seenURLStrings.insert(link.urlString).inserted {
+            merged.append(link)
+            if merged.count == LogLinkDetector.defaultMaxCount {
+                break
+            }
+        }
+
+        return merged
+    }
+}
+
+private struct LogLinkScanCache {
+    private struct CachedLink {
+        var link: DetectedLogLink
+        var sequence: Int
+        var lineID: String
+    }
+
+    private var contextID: String?
+    private var scannedLineIDs = Set<String>()
+    private var baseURL: URL?
+    private var linksByURLString: [String: CachedLink] = [:]
+
+    mutating func reset(contextID: String? = nil) {
+        self.contextID = contextID
+        scannedLineIDs = []
+        baseURL = nil
+        linksByURLString = [:]
+    }
+
+    mutating func update(contextID: String, lines: [LogLine]) -> [DetectedLogLink] {
+        if self.contextID != contextID {
+            reset(contextID: contextID)
+        }
+
+        let retainedLineIDs = Set(lines.map(\.id))
+        let needsRebuild = pruneRetainedState(retainedLineIDs: retainedLineIDs)
+        var shouldRescanLinesWithBaseURL = false
+        for line in lines where scannedLineIDs.insert(line.id).inserted {
+            let links = LogLinkDetector.detectLinks(in: line.text, maxCount: 16, baseURL: baseURL)
+            cache(links, sequence: line.sequence, lineID: line.id)
+            if updateBaseURL(from: links) {
+                shouldRescanLinesWithBaseURL = true
+            }
+        }
+
+        if shouldRescanLinesWithBaseURL || needsRebuild, let baseURL {
+            rebuildLinks(from: lines, baseURL: baseURL)
+        } else if needsRebuild {
+            rebuildLinks(from: lines, baseURL: nil)
+        }
+
+        return sortedLinks()
+    }
+
+    private mutating func rebuildLinks(from lines: [LogLine], baseURL: URL?) {
+        linksByURLString = [:]
+        for line in lines {
+            let links = LogLinkDetector.detectLinks(in: line.text, maxCount: 16, baseURL: baseURL)
+            cache(links, sequence: line.sequence, lineID: line.id)
+        }
+    }
+
+    private mutating func pruneRetainedState(retainedLineIDs: Set<String>) -> Bool {
+        let previousLinkCount = linksByURLString.count
+        scannedLineIDs.formIntersection(retainedLineIDs)
+        linksByURLString = linksByURLString.filter { retainedLineIDs.contains($0.value.lineID) }
+        return linksByURLString.count != previousLinkCount
+    }
+
+    private func sortedLinks() -> [DetectedLogLink] {
+        linksByURLString.values
+            .sorted { left, right in
+                if left.sequence == right.sequence {
+                    return left.link.urlString < right.link.urlString
+                }
+                return left.sequence > right.sequence
+            }
+            .prefix(LogLinkDetector.defaultMaxCount)
+            .map(\.link)
+    }
+
+    private mutating func cache(_ links: [DetectedLogLink], sequence: Int, lineID: String) {
+        for link in links {
+            let existing = linksByURLString[link.urlString]
+            if existing == nil || sequence >= existing!.sequence {
+                linksByURLString[link.urlString] = CachedLink(link: link, sequence: sequence, lineID: lineID)
+            }
+        }
+    }
+
+    private mutating func updateBaseURL(from links: [DetectedLogLink]) -> Bool {
+        guard let inferredBaseURL = links.lazy.compactMap(Self.developmentBaseURL(from:)).first,
+              inferredBaseURL != baseURL else {
+            return false
+        }
+
+        baseURL = inferredBaseURL
+        return true
+    }
+
+    private static func developmentBaseURL(from link: DetectedLogLink) -> URL? {
+        guard var components = URLComponents(string: link.urlString),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host?.lowercased(),
+              isLocalDevelopmentHost(host) else {
+            return nil
+        }
+
+        components.scheme = scheme
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
+    private static func isLocalDevelopmentHost(_ host: String) -> Bool {
+        host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1"
     }
 }

@@ -109,6 +109,63 @@ final class MacTMUXStoreTests: XCTestCase {
         XCTAssertEqual(store.logLines.map(\.text), ["dev log"])
     }
 
+    func testSelectSessionCachesLinksFromLoadedLogs() async {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "app", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [
+                pane.id: "ready on localhost:5173/app\napi https://example.com/newer\n"
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+
+        await store.select(session)
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), [
+            "https://example.com/newer",
+            "http://localhost:5173/app"
+        ])
+    }
+
+    func testSelectSessionCachesRelativeRequestLinksAfterBaseURLAppears() async {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "app", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [
+                pane.id: """
+                15:48:03 Request » GET 200 /collections/news
+                ready on http://localhost:9292
+                15:48:04 Request » GET 404 /products/le-faitout
+                """
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+
+        await store.select(session)
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), [
+            "http://localhost:9292/products/le-faitout",
+            "http://localhost:9292",
+            "http://localhost:9292/collections/news"
+        ])
+    }
+
     func testSelectPaneReloadsLogsForThatPane() async {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let session = TmuxSession(server: server, name: "app", windows: 2, attached: false, createdAt: .now)
@@ -166,6 +223,42 @@ final class MacTMUXStoreTests: XCTestCase {
         }
 
         await store.refresh()
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), ["http://localhost:53660"])
+    }
+
+    func testSelectingPaneWithoutLinksPreservesSessionLinksFromOtherPanes() async throws {
+        let fixture = try TemporaryTmuxBinary()
+        defer {
+            fixture.remove()
+        }
+
+        let server = TmuxServer(binaryPath: fixture.tmuxPath)
+        let session = TmuxSession(server: server, name: "app", windows: 2, attached: false, createdAt: .now)
+        let devPane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let workerPane = makePane(session: session, paneID: "%2", windowIndex: 1, windowName: "queue")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [devPane, workerPane]],
+            logsByPaneID: [
+                devPane.id: "Server address: http://localhost:53660\n",
+                workerPane.id: "[ info ] Starting worker for queues: default\n"
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+        store.tmuxPathSetting = fixture.tmuxPath
+        defer {
+            store.resetTmuxPathToAutodetect()
+        }
+
+        await store.refresh()
+        await store.select(session)
+        await store.selectPane(workerPane, for: session)
 
         XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), ["http://localhost:53660"])
     }
