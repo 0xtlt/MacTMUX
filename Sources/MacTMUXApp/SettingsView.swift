@@ -85,6 +85,12 @@ struct SettingsView: View {
                 get: { store.showResourceMetrics },
                 set: { store.showResourceMetrics = $0 }
             ))
+
+            if let metricsErrorMessage = store.metricsErrorMessage {
+                Text(metricsErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

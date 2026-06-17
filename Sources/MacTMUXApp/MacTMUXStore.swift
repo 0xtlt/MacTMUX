@@ -26,36 +26,38 @@ final class MacTMUXStore: ObservableObject {
     @AppStorage("showResourceMetrics") private var showResourceMetricsRaw = true
     @AppStorage("autoRefreshLogs") private var autoRefreshLogsRaw = true
 
-    @Published private(set) var sessions: [TmuxSession] = []
-    @Published private(set) var resourceMetricsBySessionID: [String: ProcessResourceMetrics] = [:]
-    @Published private(set) var recentLinksBySessionID: [String: [DetectedLogLink]] = [:]
-    @Published private(set) var panesBySessionID: [String: [TmuxPane]] = [:]
-    @Published private(set) var selectedPaneBySessionID: [String: TmuxPane] = [:]
-    @Published private(set) var selectedSession: TmuxSession?
-    @Published private(set) var logBuffer = LogBuffer(pageSize: 200)
-    @Published private(set) var logRevision = 0
     @Published private(set) var isRefreshing = false
-    @Published private(set) var isLoadingInitialLogs = false
-    @Published private(set) var isRefreshingLogs = false
-    @Published private(set) var isLoadingOlderLogs = false
-    @Published private(set) var isMenuBarMenuPresented = false
-    @Published var errorMessage: String?
+    @Published private(set) var activeError: MacTMUXStoreError?
 
     private let client: any TmuxClientProviding
-    private let metricsClient: any ProcessMetricsProviding
+    private let sessionStore: SessionStore
+    private let logStore: SessionLogStore
+    private let resourceMetricsStore: ResourceMetricsStore
+    private let presentationStore: AppPresentationStore
     private var refreshLoopStarted = false
     private var logRefreshLoopStarted = false
-    private var loadingInitialLogSessionIDs = Set<String>()
-    private var logLinkScanCache = LogLinkScanCache()
 
     init(
         client: any TmuxClientProviding = TmuxClient(),
         metricsClient: any ProcessMetricsProviding = ProcessMetricsClient(),
+        presentationStore: AppPresentationStore = AppPresentationStore(),
         refreshOnInit: Bool = true,
         startBackgroundTasks: Bool = true
     ) {
         self.client = client
-        self.metricsClient = metricsClient
+        self.sessionStore = SessionStore(client: client)
+        self.logStore = SessionLogStore(client: client)
+        self.resourceMetricsStore = ResourceMetricsStore(metricsClient: metricsClient)
+        self.presentationStore = presentationStore
+        self.sessionStore.setNotifyChange { [weak self] in
+            self?.objectWillChange.send()
+        }
+        self.logStore.setNotifyChange { [weak self] in
+            self?.objectWillChange.send()
+        }
+        self.resourceMetricsStore.setNotifyChange { [weak self] in
+            self?.objectWillChange.send()
+        }
         DiagnosticLog.clear()
         DiagnosticLog.write("store init")
         if refreshOnInit {
@@ -73,42 +75,88 @@ final class MacTMUXStore: ObservableObject {
         }
     }
 
+    var sessions: [TmuxSession] {
+        sessionStore.sessions
+    }
+
     var compactSessions: [TmuxSession] {
-        Array(sessions.prefix(5))
+        sessionStore.compactSessions
+    }
+
+    var panesBySessionID: [String: [TmuxPane]] {
+        sessionStore.panesBySessionID
+    }
+
+    var selectedPaneBySessionID: [String: TmuxPane] {
+        sessionStore.selectedPaneBySessionID
+    }
+
+    var selectedSession: TmuxSession? {
+        sessionStore.selectedSession
+    }
+
+    var resourceMetricsBySessionID: [String: ProcessResourceMetrics] {
+        resourceMetricsStore.metricsBySessionID
+    }
+
+    var metricsErrorMessage: String? {
+        resourceMetricsStore.errorMessage
     }
 
     var logLines: [LogLine] {
-        logBuffer.lines
+        logStore.logLines
+    }
+
+    var logBuffer: LogBuffer {
+        logStore.logBuffer
+    }
+
+    var logRevision: Int {
+        logStore.logRevision
+    }
+
+    var isLoadingInitialLogs: Bool {
+        logStore.isLoadingInitialLogs
+    }
+
+    var isRefreshingLogs: Bool {
+        logStore.isRefreshingLogs
+    }
+
+    var isLoadingOlderLogs: Bool {
+        logStore.isLoadingOlderLogs
+    }
+
+    var errorMessage: String? {
+        activeError?.message
+    }
+
+    var isMenuBarMenuPresented: Bool {
+        presentationStore.isMenuBarMenuPresented
     }
 
     var selectedPane: TmuxPane? {
-        guard let selectedSession else {
-            return nil
-        }
-        return selectedPaneBySessionID[selectedSession.id]
+        sessionStore.selectedPane
     }
 
     func recentLinks(for session: TmuxSession) -> [DetectedLogLink] {
-        recentLinksBySessionID[session.id] ?? []
+        logStore.recentLinks(for: session)
     }
 
     func panes(for session: TmuxSession) -> [TmuxPane] {
-        panesBySessionID[session.id] ?? []
+        sessionStore.panes(for: session)
     }
 
     var canLoadOlderLogs: Bool {
-        logBuffer.hasMoreOlderLogs && !isLoadingSelectedInitialLogs && !isRefreshingLogs && !isLoadingOlderLogs
+        logStore.canLoadOlderLogs(selectedSession: selectedSession)
     }
 
     var isLoadingLogs: Bool {
-        isLoadingSelectedInitialLogs || isRefreshingLogs || isLoadingOlderLogs
+        logStore.isLoadingLogs
     }
 
     var isLoadingSelectedInitialLogs: Bool {
-        guard let selectedSession else {
-            return false
-        }
-        return loadingInitialLogSessionIDs.contains(selectedSession.id)
+        logStore.isLoadingInitialLogs(for: selectedSession)
     }
 
     var tmuxPath: String? {
@@ -144,7 +192,7 @@ final class MacTMUXStore: ObservableObject {
         set {
             showResourceMetricsRaw = newValue
             if !newValue {
-                resourceMetricsBySessionID = [:]
+                resourceMetricsStore.clear()
             } else {
                 Task {
                     await refresh()
@@ -175,69 +223,53 @@ final class MacTMUXStore: ObservableObject {
         }
 
         guard let tmuxPath else {
-            sessions = []
-            recentLinksBySessionID = [:]
-            panesBySessionID = [:]
-            selectedPaneBySessionID = [:]
-            errorMessage = MacTMUXError.tmuxNotFound.localizedDescription
+            sessionStore.clearAll()
+            logStore.clearAllSessionState()
+            setError(.tmux, MacTMUXError.tmuxNotFound)
             DiagnosticLog.write("tmux path not found")
             return
         }
 
         guard TmuxPathResolver.isValidTmuxBinary(tmuxPath) else {
-            sessions = []
-            recentLinksBySessionID = [:]
-            panesBySessionID = [:]
-            selectedPaneBySessionID = [:]
-            errorMessage = MacTMUXError.invalidTmuxPath(tmuxPath).localizedDescription
+            sessionStore.clearAll()
+            logStore.clearAllSessionState()
+            setError(.tmux, MacTMUXError.invalidTmuxPath(tmuxPath))
             DiagnosticLog.write("invalid tmux path \(tmuxPath)")
             return
         }
 
         do {
-            let loadedSessions = try await loadSessions(tmuxPath: tmuxPath)
-            sessions = loadedSessions
-            await loadPanes(for: loadedSessions)
-            await loadResourceMetricsIfNeeded(for: loadedSessions)
-            await loadRecentLinks(for: loadedSessions)
-            if let selectedSession {
-                if let refreshedSelection = loadedSessions.first(where: { $0.id == selectedSession.id }) {
-                    self.selectedSession = refreshedSelection
-                    selectDefaultPaneIfNeeded(for: refreshedSelection)
-                } else {
-                    self.selectedSession = nil
-                    clearLogs()
-                }
+            let result = try await sessionStore.refresh(tmuxPath: tmuxPath)
+            await loadResourceMetricsIfNeeded(for: result.sessions)
+            await loadRecentLinks(for: result.sessions)
+            if result.removedSelectedSession {
+                logStore.clearLogs()
             }
             if let selectedSession, let pane = selectedPane(for: selectedSession) {
-                updateCurrentLogLinks(for: selectedSession, pane: pane)
+                logStore.updateCurrentLogLinks(for: selectedSession, pane: pane)
             }
-            errorMessage = nil
+            clearError(.tmux)
         } catch {
-            sessions = []
-            recentLinksBySessionID = [:]
-            panesBySessionID = [:]
-            selectedPaneBySessionID = [:]
-            errorMessage = readableMessage(error)
+            sessionStore.clearAll()
+            logStore.clearAllSessionState()
+            setError(.tmux, error)
         }
     }
 
     func open(_ session: TmuxSession) async {
         do {
             try await TerminalLauncher(kind: terminalKind).open(session: session)
-            errorMessage = nil
+            clearError(.terminal)
         } catch {
-            errorMessage = readableMessage(error)
+            setError(.terminal, error)
         }
     }
 
     func select(_ session: TmuxSession) async {
-        if selectedSession?.id != session.id {
-            clearLogs()
+        let changedSelection = await sessionStore.select(session)
+        if changedSelection {
+            logStore.clearLogs()
         }
-        selectedSession = session
-        await loadPanesIfNeeded(for: session)
-        selectDefaultPaneIfNeeded(for: session)
         await loadInitialLogs(for: session)
     }
 
@@ -245,11 +277,10 @@ final class MacTMUXStore: ObservableObject {
         guard pane.sessionID == session.id else {
             return
         }
-        if selectedPaneBySessionID[session.id]?.id != pane.id {
-            selectedPaneBySessionID[session.id] = pane
-            clearLogs()
+        let changedPane = sessionStore.selectPane(pane, for: session)
+        if changedPane {
+            logStore.clearLogs()
         }
-        selectedSession = session
         await loadInitialLogs(for: session)
     }
 
@@ -258,65 +289,36 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func loadInitialLogs(for session: TmuxSession) async {
-        guard !isLoadingInitialLogs(for: session) else {
-            return
-        }
-        setInitialLogLoading(true, for: session.id)
-        defer {
-            setInitialLogLoading(false, for: session.id)
-        }
-
         do {
-            guard let pane = selectedPane(for: session) else {
-                clearLogs()
-                return
-            }
-            let output = try await client.captureLogs(pane: pane, startLine: -logBuffer.pageSize, endLine: -1)
-            var nextBuffer = LogBuffer(pageSize: logBuffer.pageSize, maxRetainedLines: logBuffer.maxRetainedLines)
-            _ = nextBuffer.reset(with: output)
-            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
-                return
-            }
-            logBuffer = nextBuffer
-            logRevision += 1
-            updateCurrentLogLinks(for: session, pane: pane, resetCache: true)
-            errorMessage = nil
+            try await logStore.loadInitialLogs(
+                for: session,
+                pane: selectedPane(for: session),
+                isCurrentSelection: isCurrentSelection
+            )
+            clearError(.logs)
         } catch {
             guard selectedSession?.id == session.id else {
                 return
             }
-            clearLogs()
-            errorMessage = readableMessage(error)
+            logStore.clearLogs()
+            setError(.logs, error)
         }
     }
 
     func refreshLatestLogs(for session: TmuxSession) async {
-        guard !isLoadingInitialLogs(for: session), !isRefreshingLogs, selectedSession?.id == session.id else {
+        guard selectedSession?.id == session.id else {
             return
-        }
-        isRefreshingLogs = true
-        defer {
-            isRefreshingLogs = false
         }
 
         do {
-            guard let pane = selectedPane(for: session) else {
-                return
-            }
-            let output = try await client.captureLogs(pane: pane, startLine: -logBuffer.pageSize, endLine: -1)
-            var nextBuffer = logBuffer
-            let result = nextBuffer.appendLatest(output)
-            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
-                return
-            }
-            if result.changed {
-                logBuffer = nextBuffer
-                logRevision += 1
-                updateCurrentLogLinks(for: session, pane: pane, resetCache: result.replaced)
-            }
-            errorMessage = nil
+            try await logStore.refreshLatestLogs(
+                for: session,
+                pane: selectedPane(for: session),
+                isCurrentSelection: isCurrentSelection
+            )
+            clearError(.logs)
         } catch {
-            errorMessage = readableMessage(error)
+            setError(.logs, error)
         }
     }
 
@@ -324,36 +326,16 @@ final class MacTMUXStore: ObservableObject {
         guard canLoadOlderLogs, selectedSession?.id == session.id else {
             return
         }
-        isLoadingOlderLogs = true
-        defer {
-            isLoadingOlderLogs = false
-        }
-
-        let pageSize = logBuffer.pageSize
-        let loadedLines = max(logBuffer.loadedBacklogLines, pageSize)
-        let startLine = -(loadedLines + pageSize)
-        let endLine = -(loadedLines + 1)
 
         do {
-            guard let pane = selectedPane(for: session) else {
-                return
-            }
-            let output = try await client.captureLogs(pane: pane, startLine: startLine, endLine: endLine)
-            var nextBuffer = logBuffer
-            let result = nextBuffer.prependOlder(output)
-            guard selectedSession?.id == session.id, selectedPane(for: session)?.id == pane.id else {
-                return
-            }
-            if result.changed {
-                logBuffer = nextBuffer
-                logRevision += 1
-                updateCurrentLogLinks(for: session, pane: pane)
-            } else {
-                logBuffer = nextBuffer
-            }
-            errorMessage = nil
+            try await logStore.loadOlderLogs(
+                for: session,
+                pane: selectedPane(for: session),
+                isCurrentSelection: isCurrentSelection
+            )
+            clearError(.logs)
         } catch {
-            errorMessage = readableMessage(error)
+            setError(.logs, error)
         }
     }
 
@@ -362,7 +344,7 @@ final class MacTMUXStore: ObservableObject {
             try await client.stop(session: session)
             await refresh()
         } catch {
-            errorMessage = readableMessage(error)
+            setError(.sessionAction, error)
         }
     }
 
@@ -386,9 +368,9 @@ final class MacTMUXStore: ObservableObject {
 
         await refresh()
         if failures.isEmpty {
-            errorMessage = nil
+            clearError(.sessionAction)
         } else {
-            errorMessage = bulkStopFailureMessage(failures)
+            setError(.sessionAction, bulkStopFailureMessage(failures))
         }
         return stoppedIDs
     }
@@ -397,9 +379,9 @@ final class MacTMUXStore: ObservableObject {
         do {
             try await client.restartActivePane(session: session)
             await refreshLatestLogs(for: session)
-            errorMessage = nil
+            clearError(.sessionAction)
         } catch {
-            errorMessage = readableMessage(error)
+            setError(.sessionAction, error)
         }
     }
 
@@ -408,15 +390,12 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func clearSelection() {
-        selectedSession = nil
-        clearLogs()
+        sessionStore.clearSelection()
+        logStore.clearLogs()
     }
 
     func metricsText(for session: TmuxSession) -> String? {
-        guard showResourceMetrics, let metrics = resourceMetricsBySessionID[session.id] else {
-            return nil
-        }
-        return "CPU \(metrics.formattedCPU) · RAM \(metrics.formattedMemory)"
+        resourceMetricsStore.metricsText(for: session, isEnabled: showResourceMetrics)
     }
 
     func startRefreshLoop() async {
@@ -430,7 +409,7 @@ final class MacTMUXStore: ObservableObject {
         while !Task.isCancelled {
             let seconds = max(2.0, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
-            guard !isMenuBarMenuPresented else {
+            guard !presentationStore.isMenuBarMenuPresented else {
                 continue
             }
             await refresh()
@@ -448,7 +427,7 @@ final class MacTMUXStore: ObservableObject {
         while !Task.isCancelled {
             let seconds = max(2.0, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
-            guard autoRefreshLogs, !isMenuBarMenuPresented, let selectedSession else {
+            guard autoRefreshLogs, !presentationStore.isMenuBarMenuPresented, let selectedSession else {
                 continue
             }
             await refreshLatestLogs(for: selectedSession)
@@ -456,216 +435,19 @@ final class MacTMUXStore: ObservableObject {
     }
 
     func setMenuBarMenuPresented(_ isPresented: Bool) {
-        isMenuBarMenuPresented = isPresented
-    }
-
-    private func defaultSocketPath() -> String? {
-        let uid = getuid()
-        let path = "/tmp/tmux-\(uid)/default"
-        guard FileManager.default.fileExists(atPath: path) else {
-            DiagnosticLog.write("default socket missing path=\(path)")
-            return nil
-        }
-        DiagnosticLog.write("default socket found path=\(path)")
-        return path
-    }
-
-    private func candidateServers(tmuxPath: String) -> [TmuxServer] {
-        var servers: [TmuxServer] = []
-        if let socketPath = defaultSocketPath() {
-            servers.append(TmuxServer(binaryPath: tmuxPath, socketPath: socketPath))
-        }
-        servers.append(TmuxServer(binaryPath: tmuxPath))
-        DiagnosticLog.write("candidate servers count=\(servers.count) values=\(servers)")
-        return servers
-    }
-
-    private func loadSessions(tmuxPath: String) async throws -> [TmuxSession] {
-        var lastError: Error?
-        for server in candidateServers(tmuxPath: tmuxPath) {
-            do {
-                DiagnosticLog.write("load sessions trying server=\(server)")
-                let loadedSessions = try await client.listSessions(server: server)
-                if !loadedSessions.isEmpty {
-                    DiagnosticLog.write("load sessions success count=\(loadedSessions.count) server=\(server)")
-                    return loadedSessions
-                }
-                DiagnosticLog.write("load sessions empty server=\(server)")
-            } catch {
-                lastError = error
-                DiagnosticLog.write("load sessions failed server=\(server) error=\(readableMessage(error))")
-            }
-        }
-        if let lastError {
-            throw lastError
-        }
-        return []
-    }
-
-    private func loadPanes(for sessions: [TmuxSession]) async {
-        let validSessionIDs = Set(sessions.map(\.id))
-        var nextPanesBySessionID = panesBySessionID.filter { validSessionIDs.contains($0.key) }
-        var nextSelectedPaneBySessionID = selectedPaneBySessionID.filter { validSessionIDs.contains($0.key) }
-
-        guard !sessions.isEmpty else {
-            panesBySessionID = [:]
-            selectedPaneBySessionID = [:]
-            return
-        }
-
-        let client = self.client
-        let loadedPanes = await withTaskGroup(of: (TmuxSession, [TmuxPane]?).self) { group in
-            for session in sessions {
-                group.addTask {
-                    do {
-                        return (session, try await client.listPanes(session: session))
-                    } catch {
-                        DiagnosticLog.write("list panes failed session=\(session.name) error=\(error.localizedDescription)")
-                        return (session, nil)
-                    }
-                }
-            }
-
-            var result: [(TmuxSession, [TmuxPane]?)] = []
-            for await panes in group {
-                result.append(panes)
-            }
-            return result
-        }
-
-        for (session, panes) in loadedPanes {
-            guard let panes else {
-                continue
-            }
-
-            nextPanesBySessionID[session.id] = panes
-            if let selectedPane = nextSelectedPaneBySessionID[session.id],
-               let refreshedPane = panes.first(where: { $0.id == selectedPane.id }) {
-                nextSelectedPaneBySessionID[session.id] = refreshedPane
-            } else {
-                nextSelectedPaneBySessionID[session.id] = panes.first
-            }
-        }
-
-        panesBySessionID = nextPanesBySessionID
-        selectedPaneBySessionID = nextSelectedPaneBySessionID
-    }
-
-    private func loadPanesIfNeeded(for session: TmuxSession) async {
-        guard panesBySessionID[session.id]?.isEmpty != false else {
-            return
-        }
-
-        do {
-            let panes = try await client.listPanes(session: session)
-            panesBySessionID[session.id] = panes
-            selectedPaneBySessionID[session.id] = panes.first
-        } catch {
-            panesBySessionID[session.id] = []
-            selectedPaneBySessionID.removeValue(forKey: session.id)
-            DiagnosticLog.write("list panes failed session=\(session.name) error=\(readableMessage(error))")
-        }
-    }
-
-    private func selectDefaultPaneIfNeeded(for session: TmuxSession) {
-        let panes = panesBySessionID[session.id] ?? []
-        if let selectedPane = selectedPaneBySessionID[session.id],
-           panes.contains(where: { $0.id == selectedPane.id }) {
-            return
-        }
-        selectedPaneBySessionID[session.id] = panes.first
+        presentationStore.setMenuBarMenuPresented(isPresented)
     }
 
     private func loadResourceMetricsIfNeeded(for sessions: [TmuxSession]) async {
-        guard showResourceMetrics else {
-            resourceMetricsBySessionID = [:]
-            return
-        }
-
-        let pidPairs = sessions.compactMap { session -> (String, Int32)? in
-            guard let activePanePID = session.activePanePID else {
-                return nil
-            }
-            return (session.id, activePanePID)
-        }
-
-        guard !pidPairs.isEmpty else {
-            resourceMetricsBySessionID = [:]
-            return
-        }
-
-        do {
-            let metricsByPID = try await metricsClient.metrics(forRootPIDs: pidPairs.map(\.1))
-            resourceMetricsBySessionID = Dictionary(uniqueKeysWithValues: pidPairs.compactMap { sessionID, pid in
-                guard let metrics = metricsByPID[pid] else {
-                    return nil
-                }
-                return (sessionID, metrics)
-            })
-            DiagnosticLog.write("metrics loaded count=\(resourceMetricsBySessionID.count)")
-        } catch {
-            resourceMetricsBySessionID = [:]
-            DiagnosticLog.write("metrics failed error=\(readableMessage(error))")
-        }
+        await resourceMetricsStore.loadIfEnabled(for: sessions, isEnabled: showResourceMetrics)
     }
 
     private func loadRecentLinks(for sessions: [TmuxSession]) async {
-        let validSessionIDs = Set(sessions.map(\.id))
-        var nextLinksBySessionID = recentLinksBySessionID.filter { validSessionIDs.contains($0.key) }
-        guard !sessions.isEmpty else {
-            recentLinksBySessionID = [:]
-            return
-        }
-
-        let client = self.client
-        let pageSize = min(80, logBuffer.pageSize)
-        let capturedLinks = await withTaskGroup(of: (String, [DetectedLogLink]?).self) { group in
-            for session in sessions {
-                let panes = panesBySessionID[session.id] ?? []
-                group.addTask {
-                    guard !panes.isEmpty else {
-                        return (session.id, [])
-                    }
-                    do {
-                        var output = ""
-                        for pane in panes {
-                            output += try await client.captureLogs(pane: pane, startLine: -pageSize, endLine: -1)
-                            output += "\n"
-                        }
-                        return (session.id, LogLinkDetector.detectLinks(in: output))
-                    } catch {
-                        DiagnosticLog.write("link capture failed session=\(session.name) error=\(error.localizedDescription)")
-                        return (session.id, nil)
-                    }
-                }
-            }
-
-            var linksBySessionID: [(String, [DetectedLogLink]?)] = []
-            for await result in group {
-                linksBySessionID.append(result)
-            }
-            return linksBySessionID
-        }
-
-        for (sessionID, links) in capturedLinks {
-            guard let links else {
-                continue
-            }
-            if links.isEmpty {
-                nextLinksBySessionID.removeValue(forKey: sessionID)
-            } else {
-                nextLinksBySessionID[sessionID] = links
-            }
-        }
-
-        recentLinksBySessionID = nextLinksBySessionID
+        await logStore.loadRecentLinks(for: sessions, panesBySessionID: panesBySessionID)
     }
 
     private func selectedPane(for session: TmuxSession) -> TmuxPane? {
-        if let pane = selectedPaneBySessionID[session.id] {
-            return pane
-        }
-        return panesBySessionID[session.id]?.first
+        sessionStore.selectedPane(for: session)
     }
 
     private func uniqueSessions(_ sessions: [TmuxSession]) -> [TmuxSession] {
@@ -682,43 +464,8 @@ final class MacTMUXStore: ObservableObject {
         return "Failed to stop \(failures.count) session\(failures.count == 1 ? "" : "s"):\n\(shownFailures)\(remainingText)"
     }
 
-    private func isLoadingInitialLogs(for session: TmuxSession) -> Bool {
-        loadingInitialLogSessionIDs.contains(session.id)
-    }
-
-    private func setInitialLogLoading(_ loading: Bool, for sessionID: String) {
-        if loading {
-            loadingInitialLogSessionIDs.insert(sessionID)
-        } else {
-            loadingInitialLogSessionIDs.remove(sessionID)
-        }
-        isLoadingInitialLogs = !loadingInitialLogSessionIDs.isEmpty
-    }
-
-    private func clearLogs() {
-        var nextBuffer = logBuffer
-        nextBuffer.clear()
-        logBuffer = nextBuffer
-        logLinkScanCache.reset()
-        logRevision += 1
-    }
-
-    private func updateCurrentLogLinks(for session: TmuxSession, pane: TmuxPane, resetCache: Bool = false) {
-        let contextID = "\(session.id)|\(pane.id)"
-        if resetCache {
-            logLinkScanCache.reset(contextID: contextID)
-        }
-
-        let links = logLinkScanCache.update(contextID: contextID, lines: logBuffer.lines)
-        let mergedLinks = mergedRecentLinks(
-            selectedPaneLinks: links,
-            sessionLinks: recentLinksBySessionID[session.id] ?? []
-        )
-        if mergedLinks.isEmpty {
-            recentLinksBySessionID.removeValue(forKey: session.id)
-        } else {
-            recentLinksBySessionID[session.id] = mergedLinks
-        }
+    private func isCurrentSelection(session: TmuxSession, pane: TmuxPane) -> Bool {
+        selectedSession?.id == session.id && selectedPane(for: session)?.id == pane.id
     }
 
     private func readableMessage(_ error: Error) -> String {
@@ -728,131 +475,18 @@ final class MacTMUXStore: ObservableObject {
         return error.localizedDescription
     }
 
-    private func mergedRecentLinks(
-        selectedPaneLinks: [DetectedLogLink],
-        sessionLinks: [DetectedLogLink]
-    ) -> [DetectedLogLink] {
-        var merged: [DetectedLogLink] = []
-        var seenURLStrings = Set<String>()
-
-        for link in selectedPaneLinks + sessionLinks where seenURLStrings.insert(link.urlString).inserted {
-            merged.append(link)
-            if merged.count == LogLinkDetector.defaultMaxCount {
-                break
-            }
-        }
-
-        return merged
-    }
-}
-
-private struct LogLinkScanCache {
-    private struct CachedLink {
-        var link: DetectedLogLink
-        var sequence: Int
-        var lineID: String
+    private func setError(_ scope: MacTMUXStoreErrorScope, _ error: Error) {
+        setError(scope, readableMessage(error))
     }
 
-    private var contextID: String?
-    private var scannedLineIDs = Set<String>()
-    private var baseURL: URL?
-    private var linksByURLString: [String: CachedLink] = [:]
-
-    mutating func reset(contextID: String? = nil) {
-        self.contextID = contextID
-        scannedLineIDs = []
-        baseURL = nil
-        linksByURLString = [:]
+    private func setError(_ scope: MacTMUXStoreErrorScope, _ message: String) {
+        activeError = MacTMUXStoreError(scope: scope, message: message)
     }
 
-    mutating func update(contextID: String, lines: [LogLine]) -> [DetectedLogLink] {
-        if self.contextID != contextID {
-            reset(contextID: contextID)
-        }
-
-        let retainedLineIDs = Set(lines.map(\.id))
-        let needsRebuild = pruneRetainedState(retainedLineIDs: retainedLineIDs)
-        var shouldRescanLinesWithBaseURL = false
-        for line in lines where scannedLineIDs.insert(line.id).inserted {
-            let links = LogLinkDetector.detectLinks(in: line.text, maxCount: 16, baseURL: baseURL)
-            cache(links, sequence: line.sequence, lineID: line.id)
-            if updateBaseURL(from: links) {
-                shouldRescanLinesWithBaseURL = true
-            }
-        }
-
-        if shouldRescanLinesWithBaseURL || needsRebuild, let baseURL {
-            rebuildLinks(from: lines, baseURL: baseURL)
-        } else if needsRebuild {
-            rebuildLinks(from: lines, baseURL: nil)
-        }
-
-        return sortedLinks()
-    }
-
-    private mutating func rebuildLinks(from lines: [LogLine], baseURL: URL?) {
-        linksByURLString = [:]
-        for line in lines {
-            let links = LogLinkDetector.detectLinks(in: line.text, maxCount: 16, baseURL: baseURL)
-            cache(links, sequence: line.sequence, lineID: line.id)
+    private func clearError(_ scope: MacTMUXStoreErrorScope) {
+        if activeError?.scope == scope {
+            activeError = nil
         }
     }
 
-    private mutating func pruneRetainedState(retainedLineIDs: Set<String>) -> Bool {
-        let previousLinkCount = linksByURLString.count
-        scannedLineIDs.formIntersection(retainedLineIDs)
-        linksByURLString = linksByURLString.filter { retainedLineIDs.contains($0.value.lineID) }
-        return linksByURLString.count != previousLinkCount
-    }
-
-    private func sortedLinks() -> [DetectedLogLink] {
-        linksByURLString.values
-            .sorted { left, right in
-                if left.sequence == right.sequence {
-                    return left.link.urlString < right.link.urlString
-                }
-                return left.sequence > right.sequence
-            }
-            .prefix(LogLinkDetector.defaultMaxCount)
-            .map(\.link)
-    }
-
-    private mutating func cache(_ links: [DetectedLogLink], sequence: Int, lineID: String) {
-        for link in links {
-            let existing = linksByURLString[link.urlString]
-            if existing == nil || sequence >= existing!.sequence {
-                linksByURLString[link.urlString] = CachedLink(link: link, sequence: sequence, lineID: lineID)
-            }
-        }
-    }
-
-    private mutating func updateBaseURL(from links: [DetectedLogLink]) -> Bool {
-        guard let inferredBaseURL = links.lazy.compactMap(Self.developmentBaseURL(from:)).first,
-              inferredBaseURL != baseURL else {
-            return false
-        }
-
-        baseURL = inferredBaseURL
-        return true
-    }
-
-    private static func developmentBaseURL(from link: DetectedLogLink) -> URL? {
-        guard var components = URLComponents(string: link.urlString),
-              let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = components.host?.lowercased(),
-              isLocalDevelopmentHost(host) else {
-            return nil
-        }
-
-        components.scheme = scheme
-        components.path = ""
-        components.query = nil
-        components.fragment = nil
-        return components.url
-    }
-
-    private static func isLocalDevelopmentHost(_ host: String) -> Bool {
-        host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1"
-    }
 }

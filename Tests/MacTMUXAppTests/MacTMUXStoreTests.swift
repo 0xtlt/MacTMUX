@@ -305,6 +305,44 @@ final class MacTMUXStoreTests: XCTestCase {
             "https://second.example.com"
         ])
     }
+
+    func testMetricsFailureDoesNotSetGlobalError() async throws {
+        let fixture = try TemporaryTmuxBinary()
+        defer {
+            fixture.remove()
+        }
+
+        let server = TmuxServer(binaryPath: fixture.tmuxPath)
+        let session = TmuxSession(
+            server: server,
+            name: "app",
+            windows: 1,
+            attached: false,
+            createdAt: .now,
+            activePanePID: 123
+        )
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [pane.id: "ready\n"]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: FailingMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+        store.tmuxPathSetting = fixture.tmuxPath
+        defer {
+            store.resetTmuxPathToAutodetect()
+        }
+
+        await store.refresh()
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.metricsErrorMessage, "metrics unavailable")
+    }
 }
 
 private actor DelayedLogClient: TmuxClientProviding {
@@ -422,6 +460,12 @@ private func makePane(
 private actor EmptyMetricsClient: ProcessMetricsProviding {
     func metrics(forRootPIDs rootPIDs: [Int32]) async throws -> [Int32: ProcessResourceMetrics] {
         [:]
+    }
+}
+
+private actor FailingMetricsClient: ProcessMetricsProviding {
+    func metrics(forRootPIDs rootPIDs: [Int32]) async throws -> [Int32: ProcessResourceMetrics] {
+        throw MacTMUXError.commandFailed("metrics unavailable")
     }
 }
 
