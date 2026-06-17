@@ -15,9 +15,14 @@ let package = Package(
         .target(
             name: "MacTMUXCore"
         ),
+        .target(
+            name: "MacTMUXGhosttyBridge",
+            path: "Sources/MacTMUXGhosttyBridge",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "MacTMUXApp",
-            dependencies: ["MacTMUXCore"]
+            dependencies: ["MacTMUXCore", "MacTMUXGhosttyBridge"]
         ),
         .testTarget(
             name: "MacTMUXCoreTests",

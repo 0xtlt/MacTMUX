@@ -79,13 +79,17 @@ final class MacTMUXCoreTests: XCTestCase {
 
         let list = TmuxCommands.listSessions(server: server)
         let kill = TmuxCommands.killSession(session: session)
+        let attach = TmuxCommands.attachSession(session: session)
         let capture = TmuxCommands.capturePane(session: session, lines: 50)
+        let visibleCapture = TmuxCommands.captureVisiblePane(session: session)
         let panes = TmuxCommands.listPanes(session: session)
 
         XCTAssertEqual(list.executable, "/opt/homebrew/bin/tmux")
         XCTAssertEqual(list.arguments.prefix(2), ["-L", "main"])
         XCTAssertEqual(kill.arguments.suffix(2), ["-t", "api; rm -rf /"])
+        XCTAssertEqual(attach.arguments.suffix(3), ["attach-session", "-t", "api; rm -rf /"])
         XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-", "-t", "api; rm -rf /"])
+        XCTAssertEqual(visibleCapture.arguments.suffix(4), ["capture-pane", "-pe", "-t", "api; rm -rf /"])
         XCTAssertEqual(Array(panes.arguments.dropFirst(2).prefix(4)), ["list-panes", "-s", "-t", "api; rm -rf /"])
         XCTAssertFalse(kill.arguments.contains("sh"))
         XCTAssertFalse(kill.arguments.contains("-c"))

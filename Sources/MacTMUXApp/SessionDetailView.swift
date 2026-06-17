@@ -11,6 +11,7 @@ struct SessionDetailView: View {
 
     @State private var filterCriteria = LogFilterCriteria()
     @State private var isLogOptionsPresented = false
+    @AppStorage("sessionOutputMode") private var outputModeRaw = SessionOutputMode.logs.rawValue
     @AppStorage("wrapsLongLogLines") private var wrapsLongLogLines = false
 
     var body: some View {
@@ -19,48 +20,60 @@ struct SessionDetailView: View {
 
             Divider()
 
-            LogOutputView(
-                session: session,
-                filterCriteria: filterCriteria,
-                wrapsLongLogLines: wrapsLongLogLines
-            )
+            outputSurface
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
-                    Button {
-                        isLogOptionsPresented.toggle()
-                    } label: {
-                        ToolbarCommandLabel(
-                            title: "Log Options",
-                            systemImage: "slider.horizontal.3"
-                        )
-                    }
-                    .help("Log filtering and display options")
-                    .accessibilityLabel("Log options")
-                    .popover(isPresented: $isLogOptionsPresented, arrowEdge: .bottom) {
-                        LogOptionsPopover(
-                            enabledLevels: $filterCriteria.enabledLevels,
-                            autoRefreshLogs: Binding(
-                                get: { store.autoRefreshLogs },
-                                set: { store.autoRefreshLogs = $0 }
-                            ),
-                            wrapsLongLogLines: $wrapsLongLogLines
-                        )
+                    if IntegratedTerminalFeature.isEnabled {
+                        Picker("Output mode", selection: outputModeBinding) {
+                            ForEach(SessionOutputMode.allCases) { mode in
+                                Label(mode.title, systemImage: mode.systemImage)
+                                    .tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 160)
+                        .help("Switch between captured logs and experimental terminal")
                     }
 
-                    Button {
-                        Task {
-                            await store.refreshLatestLogs(for: session)
+                    if outputMode == .logs {
+                        Button {
+                            isLogOptionsPresented.toggle()
+                        } label: {
+                            ToolbarCommandLabel(
+                                title: "Log Options",
+                                systemImage: "slider.horizontal.3"
+                            )
                         }
-                    } label: {
-                        ToolbarCommandLabel(title: "Reload", systemImage: "arrow.clockwise")
+                        .help("Log filtering and display options")
+                        .accessibilityLabel("Log options")
+                        .popover(isPresented: $isLogOptionsPresented, arrowEdge: .bottom) {
+                            LogOptionsPopover(
+                                enabledLevels: $filterCriteria.enabledLevels,
+                                autoRefreshLogs: Binding(
+                                    get: { store.autoRefreshLogs },
+                                    set: { store.autoRefreshLogs = $0 }
+                                ),
+                                wrapsLongLogLines: $wrapsLongLogLines
+                            )
+                        }
+
+                        Button {
+                            Task {
+                                await store.refreshLatestLogs(for: session)
+                            }
+                        } label: {
+                            ToolbarCommandLabel(title: "Reload", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(store.isLoadingLogs)
+                        .help("Reload logs")
+                        .accessibilityLabel("Reload logs")
                     }
-                    .disabled(store.isLoadingLogs)
-                    .help("Reload logs")
-                    .accessibilityLabel("Reload logs")
                 }
                 .controlSize(.small)
                 .fixedSize(horizontal: true, vertical: false)
@@ -70,6 +83,36 @@ struct SessionDetailView: View {
         .onChange(of: session.id) { _, _ in
             filterCriteria = LogFilterCriteria()
         }
+    }
+
+    @ViewBuilder
+    private var outputSurface: some View {
+        if outputMode == .terminal, IntegratedTerminalFeature.isEnabled {
+            IntegratedTerminalView(session: session)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            LogOutputView(
+                session: session,
+                filterCriteria: filterCriteria,
+                wrapsLongLogLines: wrapsLongLogLines
+            )
+        }
+    }
+
+    private var outputMode: SessionOutputMode {
+        get {
+            SessionOutputMode(rawValue: outputModeRaw) ?? .logs
+        }
+        nonmutating set {
+            outputModeRaw = newValue.rawValue
+        }
+    }
+
+    private var outputModeBinding: Binding<SessionOutputMode> {
+        Binding(
+            get: { outputMode },
+            set: { outputMode = $0 }
+        )
     }
 
     private var sessionHeader: some View {
@@ -170,6 +213,33 @@ struct SessionDetailView: View {
                 }
             }
         )
+    }
+}
+
+private enum SessionOutputMode: String, CaseIterable, Identifiable {
+    case logs
+    case terminal
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .logs:
+            return "Logs"
+        case .terminal:
+            return "Terminal"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .logs:
+            return "doc.text"
+        case .terminal:
+            return "terminal"
+        }
     }
 }
 

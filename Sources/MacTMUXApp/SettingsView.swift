@@ -36,8 +36,17 @@ struct SettingsView: View {
             .tabItem {
                 Label("Logs", systemImage: "doc.text.magnifyingglass")
             }
+
+            Form {
+                aboutSection
+                acknowledgementsSection
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("About", systemImage: "info.circle")
+            }
         }
-        .frame(width: 520, height: 340)
+        .frame(width: 560, height: 420)
         .scenePadding()
         .onAppear {
             launchAtLogin.refresh()
@@ -164,6 +173,50 @@ struct SettingsView: View {
             Text("Session stop and restart actions stay explicit from the menu bar and the main window.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var aboutSection: some View {
+        Section("About MacTMUX") {
+            LabeledContent("Application", value: AboutAppMetadata.name)
+            LabeledContent("Version", value: AboutAppMetadata.versionDisplay)
+
+            Text("MacTMUX may include third-party components. Their license notices are listed below.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var acknowledgementsSection: some View {
+        Section("Acknowledgements") {
+            ForEach(AboutAcknowledgements.thirdParty) { acknowledgement in
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(acknowledgement.copyright)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                        if let url = acknowledgement.url {
+                            Link(url.absoluteString, destination: url)
+                                .font(.caption)
+                        }
+
+                        Text(acknowledgement.licenseText)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 6)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(acknowledgement.name)
+                        Text(acknowledgement.licenseName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
