@@ -60,6 +60,7 @@ struct IntegratedTerminalView: View {
             }
         }
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
@@ -129,11 +130,25 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
 
     private func resolvedViewportSize(for scrollView: NSScrollView) -> NSSize {
         let geometrySize = NSSize(width: viewportSize.width, height: viewportSize.height)
-        if geometrySize.width >= TerminalTextView.characterSize.width * 8,
-           geometrySize.height >= TerminalTextView.characterSize.height * 4 {
+        let contentSize = scrollView.contentSize
+        let hasUsableGeometry = geometrySize.width >= TerminalTextView.characterSize.width * 8 &&
+            geometrySize.height >= TerminalTextView.characterSize.height * 4
+        let hasUsableContent = contentSize.width >= TerminalTextView.characterSize.width * 8 &&
+            contentSize.height >= TerminalTextView.characterSize.height * 4
+
+        if hasUsableContent, hasUsableGeometry {
+            return NSSize(
+                width: min(geometrySize.width, contentSize.width),
+                height: min(geometrySize.height, contentSize.height)
+            )
+        }
+        if hasUsableContent {
+            return contentSize
+        }
+        if hasUsableGeometry {
             return geometrySize
         }
-        return scrollView.contentSize
+        return contentSize
     }
 
     static func dismantleNSView(_ scrollView: TerminalScrollView, coordinator: Coordinator) {
@@ -167,7 +182,7 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
                 let dimensions = TerminalViewportSizing.dimensions(
                     for: viewportSize,
                     characterSize: TerminalTextView.characterSize,
-                    contentInset: TerminalTextView.contentInset
+                    contentInset: TerminalTextView.gridSizingInset
                 )
                 try client.attach(to: session, columns: dimensions.columns, rows: dimensions.rows)
                 attachedSessionID = session.id
@@ -192,7 +207,7 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
             let dimensions = TerminalViewportSizing.dimensions(
                 for: size,
                 characterSize: TerminalTextView.characterSize,
-                contentInset: TerminalTextView.contentInset
+                contentInset: TerminalTextView.gridSizingInset
             )
             client.resize(columns: dimensions.columns, rows: dimensions.rows)
             textView?.resizeTerminal(columns: dimensions.columns, rows: dimensions.rows)
@@ -221,7 +236,7 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
             let dimensions = TerminalViewportSizing.dimensions(
                 for: viewportSize,
                 characterSize: TerminalTextView.characterSize,
-                contentInset: TerminalTextView.contentInset
+                contentInset: TerminalTextView.gridSizingInset
             )
             guard dimensions.columns != TerminalViewportSizing.fallbackColumns ||
                     dimensions.rows != TerminalViewportSizing.fallbackRows else {
@@ -339,6 +354,9 @@ final class TerminalTextView: NSTextView {
     static let terminalFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     static let characterSize = "M".size(withAttributes: [.font: terminalFont])
     static let contentInset = NSSize(width: 12, height: 12)
+    static var gridSizingInset: NSSize {
+        NSSize(width: contentInset.width, height: contentInset.height + characterSize.height / 2)
+    }
     private static let searchHighlightColor = NSColor.controlAccentColor.withAlphaComponent(0.24)
 
     var onInput: ((Data) -> Void)?

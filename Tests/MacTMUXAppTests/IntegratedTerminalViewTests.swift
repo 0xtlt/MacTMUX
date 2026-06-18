@@ -26,6 +26,17 @@ final class IntegratedTerminalViewTests: XCTestCase {
         XCTAssertEqual(dimensions.rows, 20)
     }
 
+    func testViewportSizingCanReserveBottomChromeBeforeComputingGrid() {
+        let dimensions = TerminalViewportSizing.dimensions(
+            for: NSSize(width: 824, height: 344),
+            characterSize: NSSize(width: 8, height: 16),
+            contentInset: NSSize(width: 12, height: 20)
+        )
+
+        XCTAssertEqual(dimensions.columns, 100)
+        XCTAssertEqual(dimensions.rows, 19)
+    }
+
     func testTerminalDocumentWidthKeepsColumnGridWhenViewportIsNarrower() {
         let width = TerminalViewportSizing.documentWidth(
             columns: 100,
