@@ -98,17 +98,18 @@ final class IntegratedTerminalClient {
     }
 
     func resize(columns: Int, rows: Int) {
-        guard let masterHandle else {
-            return
-        }
-
         var size = winsize(
             ws_row: UInt16(max(1, rows)),
             ws_col: UInt16(max(1, columns)),
             ws_xpixel: 0,
             ws_ypixel: 0
         )
-        _ = ioctl(masterHandle.fileDescriptor, TIOCSWINSZ, &size)
+        if let masterHandle {
+            _ = ioctl(masterHandle.fileDescriptor, TIOCSWINSZ, &size)
+        }
+        if let slaveHandle {
+            _ = ioctl(slaveHandle.fileDescriptor, TIOCSWINSZ, &size)
+        }
     }
 
     func detach() {

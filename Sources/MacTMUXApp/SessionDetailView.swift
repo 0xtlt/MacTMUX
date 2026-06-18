@@ -9,10 +9,9 @@ struct SessionDetailView: View {
     var requestStop: (TmuxSession) -> Void
     var requestStopSelectedSessions: () -> Void
 
-    @State private var filterCriteria = LogFilterCriteria()
-    @State private var isLogOptionsPresented = false
-    @AppStorage("sessionOutputMode") private var outputModeRaw = SessionOutputMode.logs.rawValue
-    @AppStorage("wrapsLongLogLines") private var wrapsLongLogLines = false
+    @State private var terminalSearchQuery = ""
+    @State private var terminalEnabledLevels = LogLevel.allCasesSet
+    @State private var isLevelFilterPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,92 +26,40 @@ struct SessionDetailView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 8) {
-                    if IntegratedTerminalFeature.isEnabled {
-                        Picker("Output mode", selection: outputModeBinding) {
-                            ForEach(SessionOutputMode.allCases) { mode in
-                                Label(mode.title, systemImage: mode.systemImage)
-                                    .tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 160)
-                        .help("Switch between captured logs and experimental terminal")
-                    }
-
-                    if outputMode == .logs {
-                        Button {
-                            isLogOptionsPresented.toggle()
-                        } label: {
-                            ToolbarCommandLabel(
-                                title: "Log Options",
-                                systemImage: "slider.horizontal.3"
-                            )
-                        }
-                        .help("Log filtering and display options")
-                        .accessibilityLabel("Log options")
-                        .popover(isPresented: $isLogOptionsPresented, arrowEdge: .bottom) {
-                            LogOptionsPopover(
-                                enabledLevels: $filterCriteria.enabledLevels,
-                                autoRefreshLogs: Binding(
-                                    get: { store.autoRefreshLogs },
-                                    set: { store.autoRefreshLogs = $0 }
-                                ),
-                                wrapsLongLogLines: $wrapsLongLogLines
-                            )
-                        }
-
-                        Button {
-                            Task {
-                                await store.refreshLatestLogs(for: session)
-                            }
-                        } label: {
-                            ToolbarCommandLabel(title: "Reload", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(store.isLoadingLogs)
-                        .help("Reload logs")
-                        .accessibilityLabel("Reload logs")
-                    }
+                Button {
+                    isLevelFilterPresented.toggle()
+                } label: {
+                    Label("Levels", systemImage: levelFilterSystemImage)
                 }
                 .controlSize(.small)
-                .fixedSize(horizontal: true, vertical: false)
+                .help("Filter terminal output by log level")
+                .popover(isPresented: $isLevelFilterPresented, arrowEdge: .bottom) {
+                    TerminalLevelFilterPopover(
+                        enabledLevels: $terminalEnabledLevels
+                    )
+                }
             }
         }
-        .searchable(text: $filterCriteria.query, placement: .toolbar, prompt: "Search logs")
+        .searchable(text: $terminalSearchQuery, placement: .toolbar, prompt: "Search terminal")
         .onChange(of: session.id) { _, _ in
-            filterCriteria = LogFilterCriteria()
+            terminalSearchQuery = ""
+            terminalEnabledLevels = LogLevel.allCasesSet
         }
     }
 
-    @ViewBuilder
     private var outputSurface: some View {
-        if outputMode == .terminal, IntegratedTerminalFeature.isEnabled {
-            IntegratedTerminalView(session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            LogOutputView(
-                session: session,
-                filterCriteria: filterCriteria,
-                wrapsLongLogLines: wrapsLongLogLines
-            )
-        }
-    }
-
-    private var outputMode: SessionOutputMode {
-        get {
-            SessionOutputMode(rawValue: outputModeRaw) ?? .logs
-        }
-        nonmutating set {
-            outputModeRaw = newValue.rawValue
-        }
-    }
-
-    private var outputModeBinding: Binding<SessionOutputMode> {
-        Binding(
-            get: { outputMode },
-            set: { outputMode = $0 }
+        IntegratedTerminalView(
+            session: session,
+            searchQuery: terminalSearchQuery,
+            enabledLogLevels: terminalEnabledLevels
         )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var levelFilterSystemImage: String {
+        terminalEnabledLevels == LogLevel.allCasesSet
+            ? "line.3.horizontal.decrease.circle"
+            : "line.3.horizontal.decrease.circle.fill"
     }
 
     private var sessionHeader: some View {
@@ -201,49 +148,9 @@ struct SessionDetailView: View {
     private var sessionStatusText: String {
         "\(session.windows) \(session.windows == 1 ? "window" : "windows")"
     }
-
-    private func levelBinding(for level: LogLevel) -> Binding<Bool> {
-        Binding(
-            get: { filterCriteria.enabledLevels.contains(level) },
-            set: { isEnabled in
-                if isEnabled {
-                    filterCriteria.enabledLevels.insert(level)
-                } else {
-                    filterCriteria.enabledLevels.remove(level)
-                }
-            }
-        )
-    }
 }
 
-private enum SessionOutputMode: String, CaseIterable, Identifiable {
-    case logs
-    case terminal
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .logs:
-            return "Logs"
-        case .terminal:
-            return "Terminal"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .logs:
-            return "doc.text"
-        case .terminal:
-            return "terminal"
-        }
-    }
-}
-
-private let logLevelFilterItems: [(level: LogLevel, title: String)] = [
+private let terminalLogLevelFilterItems: [(level: LogLevel, title: String)] = [
     (.error, "Error"),
     (.warning, "Warn"),
     (.success, "Success"),
@@ -252,47 +159,28 @@ private let logLevelFilterItems: [(level: LogLevel, title: String)] = [
     (.plain, "Plain")
 ]
 
-private struct LogOptionsPopover: View {
+private struct TerminalLevelFilterPopover: View {
     @Binding var enabledLevels: Set<LogLevel>
-    @Binding var autoRefreshLogs: Bool
-    @Binding var wrapsLongLogLines: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Level Filters")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Log Levels")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 8)], alignment: .leading, spacing: 8) {
-                    ForEach(logLevelFilterItems, id: \.level) { item in
-                        Toggle(item.title, isOn: levelBinding(for: item.level))
-                            .toggleStyle(.checkbox)
-                    }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(terminalLogLevelFilterItems, id: \.level) { item in
+                    Toggle(item.title, isOn: levelBinding(for: item.level))
+                        .toggleStyle(.checkbox)
                 }
-
-                Button("Show All Levels") {
-                    enabledLevels = LogLevel.allCasesSet
-                }
-                .disabled(enabledLevels == LogLevel.allCasesSet)
-                .controlSize(.small)
             }
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Display")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Auto Refresh", isOn: $autoRefreshLogs)
-                    .toggleStyle(.checkbox)
-
-                Toggle("Wrap Lines", isOn: $wrapsLongLogLines)
-                    .toggleStyle(.checkbox)
+            Button("Show All Levels") {
+                enabledLevels = LogLevel.allCasesSet
             }
+            .disabled(enabledLevels == LogLevel.allCasesSet)
+            .controlSize(.small)
         }
         .padding(14)
         .frame(width: 260)
@@ -309,21 +197,5 @@ private struct LogOptionsPopover: View {
                 }
             }
         )
-    }
-}
-
-private struct ToolbarCommandLabel: View {
-    var title: String
-    var systemImage: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
-            Text(title)
-                .font(.callout)
-        }
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 }

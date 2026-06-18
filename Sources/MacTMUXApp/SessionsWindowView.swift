@@ -64,7 +64,7 @@ struct SessionsWindowView: View {
                 ContentUnavailableView {
                     Label("Select a session", systemImage: "terminal")
                 } description: {
-                    Text("Choose a tmux session in the sidebar to inspect panes and logs.")
+                    Text("Choose a tmux session in the sidebar to attach to its terminal.")
                 } actions: {
                     Button("Refresh", systemImage: "arrow.clockwise") {
                         Task {

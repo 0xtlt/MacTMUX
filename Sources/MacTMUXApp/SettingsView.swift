@@ -29,12 +29,12 @@ struct SettingsView: View {
             }
 
             Form {
-                logsSection
+                linkDetectionSection
                 safetySection
             }
             .formStyle(.grouped)
             .tabItem {
-                Label("Logs", systemImage: "doc.text.magnifyingglass")
+                Label("Links", systemImage: "link")
             }
 
             Form {
@@ -152,14 +152,14 @@ struct SettingsView: View {
         }
     }
 
-    private var logsSection: some View {
-        Section("Logs") {
-            Toggle("Auto-refresh selected logs", isOn: Binding(
+    private var linkDetectionSection: some View {
+        Section("Link detection") {
+            Toggle("Auto-refresh detected links", isOn: Binding(
                 get: { store.autoRefreshLogs },
                 set: { store.autoRefreshLogs = $0 }
             ))
 
-            Text("Logs are displayed in memory. Common secrets are redacted before rendering.")
+            Text("MacTMUX samples tmux output in memory to keep recent links available. Common secrets are redacted before detection.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

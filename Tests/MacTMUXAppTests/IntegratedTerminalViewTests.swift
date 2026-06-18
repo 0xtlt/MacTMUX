@@ -1,4 +1,5 @@
 import AppKit
+import MacTMUXCore
 @testable import MacTMUXApp
 import XCTest
 
@@ -12,6 +13,17 @@ final class IntegratedTerminalViewTests: XCTestCase {
 
         XCTAssertEqual(dimensions.columns, TerminalViewportSizing.fallbackColumns)
         XCTAssertEqual(dimensions.rows, TerminalViewportSizing.fallbackRows)
+    }
+
+    func testViewportSizingSubtractsTextInsetBeforeComputingGrid() {
+        let dimensions = TerminalViewportSizing.dimensions(
+            for: NSSize(width: 824, height: 344),
+            characterSize: NSSize(width: 8, height: 16),
+            contentInset: NSSize(width: 12, height: 12)
+        )
+
+        XCTAssertEqual(dimensions.columns, 100)
+        XCTAssertEqual(dimensions.rows, 20)
     }
 
     func testTerminalDocumentWidthKeepsColumnGridWhenViewportIsNarrower() {
@@ -77,6 +89,103 @@ final class IntegratedTerminalViewTests: XCTestCase {
         XCTAssertFalse(textView.string.contains("\u{1B}"))
     }
 
+    func testTerminalTextViewHighlightsTerminalSearchMatchesCaseInsensitively() {
+        let textView = TerminalTextView()
+
+        textView.appendTerminalData(Data("Preview URL: http://localhost:3457\npreview url ready\n".utf8))
+        textView.updateSearchQuery("preview url")
+
+        XCTAssertEqual(textView.searchMatchCount, 2)
+    }
+
+    func testTerminalTextViewClearsTerminalSearchMatches() {
+        let textView = TerminalTextView()
+
+        textView.appendTerminalData(Data("Preview URL: http://localhost:3457\n".utf8))
+        textView.updateSearchQuery("preview")
+        XCTAssertEqual(textView.searchMatchCount, 1)
+
+        textView.updateSearchQuery("")
+
+        XCTAssertEqual(textView.searchMatchCount, 0)
+    }
+
+    func testTerminalTextViewDoesNotJumpToBottomWhileSearchIsActive() {
+        let scrollView = TerminalScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
+        let textView = TerminalTextView()
+        scrollView.documentView = textView
+        textView.resizeDocument(to: scrollView.contentSize)
+
+        let initialOutput = (0..<90)
+            .map { $0 == 60 ? "line \($0) target" : "line \($0)" }
+            .joined(separator: "\n")
+        textView.appendTerminalData(Data(initialOutput.utf8))
+        textView.updateSearchQuery("target")
+
+        let originAfterSearch = scrollView.contentView.bounds.origin
+
+        textView.appendTerminalData(Data("\nnew tail output\n".utf8))
+
+        XCTAssertEqual(scrollView.contentView.bounds.origin.x, originAfterSearch.x, accuracy: 1)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, originAfterSearch.y, accuracy: 1)
+    }
+
+    func testTerminalTextViewFiltersRenderedOutputByLogLevel() {
+        let textView = TerminalTextView()
+
+        textView.appendTerminalData(Data("""
+        [error] failed request status=502
+        WARN deprecated API status=404
+        SUCCESS ready status=200
+        [info] loading page
+        debug trace enabled
+        plain message
+
+        """.utf8))
+
+        textView.updateEnabledLogLevels([.error, .warning])
+
+        XCTAssertTrue(textView.string.contains("failed request"))
+        XCTAssertTrue(textView.string.contains("deprecated API"))
+        XCTAssertFalse(textView.string.contains("ready status=200"))
+        XCTAssertFalse(textView.string.contains("loading page"))
+        XCTAssertFalse(textView.string.contains("debug trace"))
+        XCTAssertFalse(textView.string.contains("plain message"))
+    }
+
+    func testTerminalTextViewRestoresAllRenderedOutputAfterClearingLogLevelFilter() {
+        let textView = TerminalTextView()
+
+        textView.appendTerminalData(Data("""
+        [error] failed request status=502
+        SUCCESS ready status=200
+
+        """.utf8))
+        textView.updateEnabledLogLevels([.error])
+        XCTAssertFalse(textView.string.contains("ready status=200"))
+
+        textView.updateEnabledLogLevels(LogLevel.allCasesSet)
+
+        XCTAssertTrue(textView.string.contains("failed request"))
+        XCTAssertTrue(textView.string.contains("ready status=200"))
+    }
+
+    func testTerminalTextViewSearchesWithinFilteredTerminalOutput() {
+        let textView = TerminalTextView()
+
+        textView.appendTerminalData(Data("""
+        [error] target failed request status=502
+        SUCCESS target ready status=200
+
+        """.utf8))
+        textView.updateEnabledLogLevels([.success])
+        textView.updateSearchQuery("target")
+
+        XCTAssertEqual(textView.searchMatchCount, 1)
+        XCTAssertFalse(textView.string.contains("failed request"))
+        XCTAssertTrue(textView.string.contains("ready status=200"))
+    }
+
     func testTerminalScrollViewReportsViewportResizeDuringLayout() {
         let scrollView = TerminalScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 320))
         let textView = TerminalTextView()
@@ -92,6 +201,23 @@ final class IntegratedTerminalViewTests: XCTestCase {
         XCTAssertNotNil(reportedSize)
         XCTAssertGreaterThan(reportedSize?.width ?? 0, 0)
         XCTAssertGreaterThan(reportedSize?.height ?? 0, 0)
+    }
+
+    func testTerminalScrollViewReportsViewportResizeWhenFrameChanges() {
+        let scrollView = TerminalScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
+        let textView = TerminalTextView()
+        scrollView.documentView = textView
+
+        var reportedSizes: [NSSize] = []
+        scrollView.onViewportResize = { size in
+            reportedSizes.append(size)
+        }
+
+        scrollView.setFrameSize(NSSize(width: 960, height: 520))
+
+        XCTAssertEqual(reportedSizes.last?.width, scrollView.contentSize.width)
+        XCTAssertEqual(reportedSizes.last?.height, scrollView.contentSize.height)
+        XCTAssertGreaterThan(reportedSizes.last?.height ?? 0, 120)
     }
 
     func testTerminalTextViewSendsPrintableKeyInput() throws {

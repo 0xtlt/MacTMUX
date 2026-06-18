@@ -2,26 +2,25 @@ import AppKit
 import MacTMUXCore
 import SwiftUI
 
-enum IntegratedTerminalFeature {
-    static let isEnabled = true
-}
-
 enum TerminalViewportSizing {
     static let fallbackColumns = 100
     static let fallbackRows = 30
 
     static func dimensions(
         for viewportSize: NSSize,
-        characterSize: NSSize
+        characterSize: NSSize,
+        contentInset: NSSize = .zero
     ) -> (columns: Int, rows: Int) {
-        guard viewportSize.width >= characterSize.width * 8,
-              viewportSize.height >= characterSize.height * 4 else {
+        let usableWidth = max(0, viewportSize.width - contentInset.width * 2)
+        let usableHeight = max(0, viewportSize.height - contentInset.height * 2)
+        guard usableWidth >= characterSize.width * 8,
+              usableHeight >= characterSize.height * 4 else {
             return (fallbackColumns, fallbackRows)
         }
 
         return (
-            max(1, Int(viewportSize.width / characterSize.width)),
-            max(1, Int(viewportSize.height / characterSize.height))
+            max(1, Int(usableWidth / characterSize.width)),
+            max(1, Int(usableHeight / characterSize.height))
         )
     }
 
@@ -36,18 +35,28 @@ enum TerminalViewportSizing {
 
 struct IntegratedTerminalView: View {
     var session: TmuxSession
+    var searchQuery = ""
+    var enabledLogLevels = LogLevel.allCasesSet
     @State private var errorMessage: String?
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            IntegratedTerminalSurface(session: session, errorMessage: $errorMessage)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                IntegratedTerminalSurface(
+                    session: session,
+                    viewportSize: geometry.size,
+                    searchQuery: searchQuery,
+                    enabledLogLevels: enabledLogLevels,
+                    errorMessage: $errorMessage
+                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(10)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(10)
+                }
             }
         }
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
@@ -61,6 +70,9 @@ struct IntegratedTerminalView: View {
 
 private struct IntegratedTerminalSurface: NSViewRepresentable {
     var session: TmuxSession
+    var viewportSize: CGSize
+    var searchQuery: String
+    var enabledLogLevels: Set<LogLevel>
     @Binding var errorMessage: String?
 
     func makeCoordinator() -> Coordinator {
@@ -87,13 +99,20 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
         scrollView.onViewportResize = { [weak coordinator = context.coordinator] size in
             coordinator?.resize(to: size)
         }
-        textView.resizeDocument(to: scrollView.contentSize)
+        textView.resizeDocument(to: resolvedViewportSize(for: scrollView))
+        textView.updateSearchQuery(searchQuery)
+        textView.updateEnabledLogLevels(enabledLogLevels)
 
-        context.coordinator.attach(to: session, in: scrollView)
+        context.coordinator.attach(to: session, viewportSize: resolvedViewportSize(for: scrollView))
         return scrollView
     }
 
     func updateNSView(_ scrollView: TerminalScrollView, context: Context) {
+        if let textView = scrollView.documentView as? TerminalTextView {
+            textView.updateSearchQuery(searchQuery)
+            textView.updateEnabledLogLevels(enabledLogLevels)
+        }
+
         context.coordinator.setErrorMessage = { message in
             errorMessage = message
         }
@@ -102,10 +121,19 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
         }
 
         if context.coordinator.attachedSessionID != session.id {
-            context.coordinator.attach(to: session, in: scrollView)
+            context.coordinator.attach(to: session, viewportSize: resolvedViewportSize(for: scrollView))
         } else {
-            context.coordinator.resize(to: scrollView.contentSize)
+            context.coordinator.resize(to: resolvedViewportSize(for: scrollView))
         }
+    }
+
+    private func resolvedViewportSize(for scrollView: NSScrollView) -> NSSize {
+        let geometrySize = NSSize(width: viewportSize.width, height: viewportSize.height)
+        if geometrySize.width >= TerminalTextView.characterSize.width * 8,
+           geometrySize.height >= TerminalTextView.characterSize.height * 4 {
+            return geometrySize
+        }
+        return scrollView.contentSize
     }
 
     static func dismantleNSView(_ scrollView: TerminalScrollView, coordinator: Coordinator) {
@@ -122,7 +150,7 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
         var setErrorMessage: ((String?) -> Void)?
         private var snapshotTask: Task<Void, Never>?
 
-        func attach(to session: TmuxSession, in scrollView: NSScrollView) {
+        func attach(to session: TmuxSession, viewportSize: NSSize) {
             detach()
             textView?.clear()
             client.onOutput = { [weak self] data in
@@ -137,14 +165,15 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
 
             do {
                 let dimensions = TerminalViewportSizing.dimensions(
-                    for: scrollView.contentSize,
-                    characterSize: TerminalTextView.characterSize
+                    for: viewportSize,
+                    characterSize: TerminalTextView.characterSize,
+                    contentInset: TerminalTextView.contentInset
                 )
                 try client.attach(to: session, columns: dimensions.columns, rows: dimensions.rows)
                 attachedSessionID = session.id
                 attachedSession = session
                 setErrorMessage?(nil)
-                resize(to: scrollView.contentSize)
+                resize(to: viewportSize)
                 DispatchQueue.main.async { [weak self] in
                     self?.textView?.focusForTerminalInput()
                 }
@@ -162,7 +191,8 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
         func resize(to size: NSSize) {
             let dimensions = TerminalViewportSizing.dimensions(
                 for: size,
-                characterSize: TerminalTextView.characterSize
+                characterSize: TerminalTextView.characterSize,
+                contentInset: TerminalTextView.contentInset
             )
             client.resize(columns: dimensions.columns, rows: dimensions.rows)
             textView?.resizeTerminal(columns: dimensions.columns, rows: dimensions.rows)
@@ -190,7 +220,8 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
         private func loadInitialSnapshotIfNeeded(for session: TmuxSession, viewportSize: NSSize) {
             let dimensions = TerminalViewportSizing.dimensions(
                 for: viewportSize,
-                characterSize: TerminalTextView.characterSize
+                characterSize: TerminalTextView.characterSize,
+                contentInset: TerminalTextView.contentInset
             )
             guard dimensions.columns != TerminalViewportSizing.fallbackColumns ||
                     dimensions.rows != TerminalViewportSizing.fallbackRows else {
@@ -258,6 +289,7 @@ private struct IntegratedTerminalSurface: NSViewRepresentable {
 
 final class TerminalScrollView: NSScrollView {
     var onViewportResize: ((NSSize) -> Void)?
+    private var lastReportedViewportSize: NSSize = .zero
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
@@ -272,23 +304,54 @@ final class TerminalScrollView: NSScrollView {
         super.mouseDown(with: event)
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        notifyViewportResizeIfNeeded()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in
+            self?.notifyViewportResizeIfNeeded()
+        }
+    }
+
     override func layout() {
         super.layout()
-        onViewportResize?(contentSize)
+        notifyViewportResizeIfNeeded()
+    }
+
+    private func notifyViewportResizeIfNeeded() {
+        let size = contentSize
+        guard size.width > 0,
+              size.height > 0,
+              abs(size.width - lastReportedViewportSize.width) >= 1 ||
+                abs(size.height - lastReportedViewportSize.height) >= 1 else {
+            return
+        }
+
+        lastReportedViewportSize = size
+        onViewportResize?(size)
     }
 }
 
 final class TerminalTextView: NSTextView {
     static let terminalFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     static let characterSize = "M".size(withAttributes: [.font: terminalFont])
+    static let contentInset = NSSize(width: 12, height: 12)
+    private static let searchHighlightColor = NSColor.controlAccentColor.withAlphaComponent(0.24)
 
     var onInput: ((Data) -> Void)?
     private let backingTextStorage: NSTextStorage
     private let backingLayoutManager: NSLayoutManager
     private let backingTextContainer: NSTextContainer
     private lazy var emulator = TerminalEmulatorBridge()
+    private var terminalBuffer = NSMutableAttributedString()
     private var viewportSize: NSSize = .zero
     private var terminalColumns = TerminalViewportSizing.fallbackColumns
+    private var searchQuery = ""
+    private var enabledLogLevels = LogLevel.allCasesSet
+    private var searchMatchRanges: [NSRange] = []
 
     convenience init() {
         self.init(frame: .zero, textContainer: nil)
@@ -314,7 +377,7 @@ final class TerminalTextView: NSTextView {
             .underlineStyle: 0
         ]
         insertionPointColor = .clear
-        textContainerInset = NSSize(width: 12, height: 12)
+        textContainerInset = Self.contentInset
         textContainer?.lineFragmentPadding = 0
         textContainer?.lineBreakMode = .byClipping
         layoutManager?.usesFontLeading = false
@@ -381,12 +444,43 @@ final class TerminalTextView: NSTextView {
     }
 
     func clear() {
-        string = ""
-        resizeDocument(to: viewportSize)
+        terminalBuffer = NSMutableAttributedString()
+        refreshDisplayedBuffer(
+            preserveScrollOrigin: nil,
+            scrollToBottom: false,
+            scrollToFirstSearchMatch: false
+        )
     }
 
     var isVisiblyEmpty: Bool {
         string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var searchMatchCount: Int {
+        searchMatchRanges.count
+    }
+
+    func updateSearchQuery(_ query: String) {
+        guard query != searchQuery else {
+            return
+        }
+
+        searchQuery = query
+        refreshSearchHighlights(scrollToFirstMatch: true)
+    }
+
+    func updateEnabledLogLevels(_ levels: Set<LogLevel>) {
+        guard levels != enabledLogLevels else {
+            return
+        }
+
+        let previousScrollOrigin = enclosingScrollView?.contentView.bounds.origin
+        enabledLogLevels = levels
+        refreshDisplayedBuffer(
+            preserveScrollOrigin: previousScrollOrigin,
+            scrollToBottom: false,
+            scrollToFirstSearchMatch: hasActiveSearch
+        )
     }
 
     func setTerminalSnapshot(_ data: Data) {
@@ -398,16 +492,15 @@ final class TerminalTextView: NSTextView {
         let previousScrollOrigin = enclosingScrollView?.contentView.bounds.origin
         let output = emulator.render(data: data, font: Self.terminalFont)
         if output.replacesBuffer {
-            textStorage?.setAttributedString(output.attributedString)
+            terminalBuffer = NSMutableAttributedString(attributedString: output.attributedString)
         } else {
-            textStorage?.append(output.attributedString)
+            terminalBuffer.append(output.attributedString)
         }
-        resizeDocument(to: viewportSize)
-        if output.replacesBuffer {
-            preserveTerminalScrollOrigin(previousScrollOrigin)
-        } else {
-            scrollRangeToVisible(NSRange(location: textStorage?.length ?? 0, length: 0))
-        }
+        refreshDisplayedBuffer(
+            preserveScrollOrigin: previousScrollOrigin,
+            scrollToBottom: !output.replacesBuffer && !hasActiveSearch,
+            scrollToFirstSearchMatch: false
+        )
     }
 
     func preserveTerminalScrollOrigin(_ origin: NSPoint?) {
@@ -482,6 +575,119 @@ final class TerminalTextView: NSTextView {
         }
 
         return sequence?.data(using: .utf8)
+    }
+
+    private var hasActiveSearch: Bool {
+        !normalizedSearchQuery.isEmpty
+    }
+
+    private var hasActiveLogLevelFilter: Bool {
+        enabledLogLevels != LogLevel.allCasesSet
+    }
+
+    private var normalizedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func refreshDisplayedBuffer(
+        preserveScrollOrigin: NSPoint?,
+        scrollToBottom: Bool,
+        scrollToFirstSearchMatch: Bool
+    ) {
+        textStorage?.setAttributedString(displayedTerminalBuffer())
+        resizeDocument(to: viewportSize)
+
+        if scrollToBottom {
+            scrollRangeToVisible(NSRange(location: textStorage?.length ?? 0, length: 0))
+        } else {
+            preserveTerminalScrollOrigin(preserveScrollOrigin)
+        }
+
+        refreshSearchHighlights(scrollToFirstMatch: scrollToFirstSearchMatch)
+    }
+
+    private func displayedTerminalBuffer() -> NSAttributedString {
+        guard hasActiveLogLevelFilter, terminalBuffer.length > 0 else {
+            return NSAttributedString(attributedString: terminalBuffer)
+        }
+
+        let filteredBuffer = NSMutableAttributedString()
+        let text = terminalBuffer.string as NSString
+        var location = 0
+
+        while location < text.length {
+            var lineStart = 0
+            var lineEnd = 0
+            var contentsEnd = 0
+            text.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
+
+            let contentsRange = NSRange(location: lineStart, length: max(0, contentsEnd - lineStart))
+            let lineText = text.substring(with: contentsRange)
+            if enabledLogLevels.contains(LogBuffer.classify(lineText)) {
+                filteredBuffer.append(terminalBuffer.attributedSubstring(from: NSRange(
+                    location: lineStart,
+                    length: lineEnd - lineStart
+                )))
+            }
+
+            guard lineEnd > location else {
+                break
+            }
+            location = lineEnd
+        }
+
+        return filteredBuffer
+    }
+
+    private func refreshSearchHighlights(scrollToFirstMatch: Bool) {
+        clearSearchHighlights()
+        searchMatchRanges = []
+
+        let needle = normalizedSearchQuery
+        guard !needle.isEmpty, backingTextStorage.length > 0 else {
+            return
+        }
+
+        let haystack = backingTextStorage.string as NSString
+        var remainingRange = NSRange(location: 0, length: haystack.length)
+
+        while remainingRange.length > 0 {
+            let foundRange = haystack.range(
+                of: needle,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                range: remainingRange
+            )
+
+            guard foundRange.location != NSNotFound, foundRange.length > 0 else {
+                break
+            }
+
+            searchMatchRanges.append(foundRange)
+            backingLayoutManager.addTemporaryAttribute(
+                .backgroundColor,
+                value: Self.searchHighlightColor,
+                forCharacterRange: foundRange
+            )
+
+            let nextLocation = foundRange.location + foundRange.length
+            guard nextLocation < haystack.length else {
+                break
+            }
+            remainingRange = NSRange(location: nextLocation, length: haystack.length - nextLocation)
+        }
+
+        if scrollToFirstMatch, let firstMatch = searchMatchRanges.first {
+            scrollRangeToVisible(firstMatch)
+        }
+    }
+
+    private func clearSearchHighlights() {
+        let fullRange = NSRange(location: 0, length: backingTextStorage.length)
+        guard fullRange.length > 0 else {
+            return
+        }
+
+        backingLayoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
     }
 
     override func paste(_ sender: Any?) {

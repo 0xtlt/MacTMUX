@@ -245,7 +245,84 @@ final class IntegratedTerminalClientIntegrationTests: XCTestCase {
         XCTAssertTrue(output.contains(sentinel))
     }
 
+    func testResizeUpdatesAttachedTmuxClientSize() async throws {
+        guard let tmuxPath = TmuxPathResolver.autodetect() else {
+            throw XCTSkip("tmux is not available on a trusted path.")
+        }
+
+        let socketName = "mactmux-resize-\(UUID().uuidString)"
+        let sessionName = "mactmux-resize-\(UUID().uuidString)"
+        let server = TmuxServer(binaryPath: tmuxPath, socketName: socketName)
+        let session = TmuxSession(
+            server: server,
+            name: sessionName,
+            windows: 1,
+            attached: false,
+            createdAt: Date()
+        )
+
+        try Self.runTmux(
+            tmuxPath,
+            arguments: TmuxCommands.serverArguments(for: server) + [
+                "new-session",
+                "-d",
+                "-s",
+                sessionName,
+                "printf ready; sleep 30"
+            ]
+        )
+        defer {
+            try? Self.runTmux(
+                tmuxPath,
+                arguments: TmuxCommands.serverArguments(for: server) + [
+                    "kill-session",
+                    "-t",
+                    sessionName
+                ]
+            )
+        }
+
+        let client = IntegratedTerminalClient(environment: [
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "TERM": "xterm-256color"
+        ])
+        let outputExpectation = expectation(description: "attached tmux client emits output before resize")
+        var didFulfillOutput = false
+        client.onOutput = { data in
+            guard !data.isEmpty, !didFulfillOutput else {
+                return
+            }
+            didFulfillOutput = true
+            outputExpectation.fulfill()
+        }
+
+        try client.attach(to: session, columns: 100, rows: 30)
+        await fulfillment(of: [outputExpectation], timeout: 3)
+
+        client.resize(columns: 132, rows: 44)
+        try await Task.sleep(for: .milliseconds(150))
+
+        let clientSize = try Self.captureTmux(
+            tmuxPath,
+            arguments: TmuxCommands.serverArguments(for: server) + [
+                "list-clients",
+                "-t",
+                sessionName,
+                "-F",
+                "#{client_width}x#{client_height}"
+            ]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        client.detach()
+
+        XCTAssertEqual(clientSize, "132x44")
+    }
+
     private static func runTmux(_ executable: String, arguments: [String]) throws {
+        _ = try captureTmux(executable, arguments: arguments)
+    }
+
+    private static func captureTmux(_ executable: String, arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -254,7 +331,9 @@ final class IntegratedTerminalClientIntegrationTests: XCTestCase {
             "TERM": "xterm-256color"
         ]
 
+        let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         try process.run()
         process.waitUntilExit()
@@ -266,6 +345,8 @@ final class IntegratedTerminalClientIntegrationTests: XCTestCase {
                 stderr: stderr
             )
         }
+        let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: stdout, encoding: .utf8) ?? ""
     }
 }
 
