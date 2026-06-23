@@ -34,6 +34,8 @@ final class MacTMUXStore: ObservableObject {
     private let logStore: SessionLogStore
     private let resourceMetricsStore: ResourceMetricsStore
     private let presentationStore: AppPresentationStore
+    private let minimumRefreshInterval: Double
+    private let logRefreshInterval: Double
     private var refreshLoopStarted = false
     private var logRefreshLoopStarted = false
 
@@ -42,13 +44,17 @@ final class MacTMUXStore: ObservableObject {
         metricsClient: any ProcessMetricsProviding = ProcessMetricsClient(),
         presentationStore: AppPresentationStore = AppPresentationStore(),
         refreshOnInit: Bool = true,
-        startBackgroundTasks: Bool = true
+        startBackgroundTasks: Bool = true,
+        minimumRefreshInterval: Double = 2.0,
+        logRefreshInterval: Double = 1.0
     ) {
         self.client = client
         self.sessionStore = SessionStore(client: client)
         self.logStore = SessionLogStore(client: client)
         self.resourceMetricsStore = ResourceMetricsStore(metricsClient: metricsClient)
         self.presentationStore = presentationStore
+        self.minimumRefreshInterval = minimumRefreshInterval
+        self.logRefreshInterval = logRefreshInterval
         self.sessionStore.setNotifyChange { [weak self] in
             self?.objectWillChange.send()
         }
@@ -378,7 +384,8 @@ final class MacTMUXStore: ObservableObject {
     func restart(_ session: TmuxSession) async {
         do {
             try await client.restartActivePane(session: session)
-            await refreshLatestLogs(for: session)
+            logStore.clearLogs()
+            await loadInitialLogs(for: session)
             clearError(.sessionAction)
         } catch {
             setError(.sessionAction, error)
@@ -407,11 +414,8 @@ final class MacTMUXStore: ObservableObject {
         DiagnosticLog.write("refresh loop started interval=\(refreshInterval)")
 
         while !Task.isCancelled {
-            let seconds = max(2.0, refreshInterval)
+            let seconds = max(minimumRefreshInterval, refreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
-            guard !presentationStore.isMenuBarMenuPresented else {
-                continue
-            }
             await refresh()
         }
     }
@@ -425,9 +429,9 @@ final class MacTMUXStore: ObservableObject {
         DiagnosticLog.write("log refresh loop started")
 
         while !Task.isCancelled {
-            let seconds = max(2.0, refreshInterval)
+            let seconds = max(0.5, logRefreshInterval)
             try? await Task.sleep(for: .seconds(seconds))
-            guard autoRefreshLogs, !presentationStore.isMenuBarMenuPresented, let selectedSession else {
+            guard autoRefreshLogs, let selectedSession else {
                 continue
             }
             await refreshLatestLogs(for: selectedSession)

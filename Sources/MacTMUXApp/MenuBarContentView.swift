@@ -6,7 +6,8 @@ struct MenuBarContentView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openURL) private var openURL
     @Environment(\.openWindow) private var openWindow
-    @EnvironmentObject private var store: MacTMUXStore
+    let store: MacTMUXStore
+    @State private var snapshot = MenuBarSnapshot()
 
     var body: some View {
         Group {
@@ -14,12 +15,13 @@ struct MenuBarContentView: View {
                 showSessions()
             }
 
-            Button(store.isRefreshing ? "Refreshing..." : "Refresh") {
-                Task {
+            Button(snapshot.isRefreshing ? "Refreshing..." : "Refresh") {
+                Task { @MainActor in
                     await store.refresh()
+                    snapshot = MenuBarSnapshot(store: store)
                 }
             }
-            .disabled(store.isRefreshing)
+            .disabled(snapshot.isRefreshing)
 
             Button("Settings...") {
                 AppActivationController.presentUserWindow()
@@ -28,20 +30,20 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            if let errorMessage = store.errorMessage {
+            if let errorMessage = snapshot.errorMessage {
                 Text("Error: \(menuTitle(errorMessage))")
             }
 
-            if store.sessions.isEmpty {
-                Text(store.isRefreshing ? "Refreshing..." : "No tmux sessions")
+            if snapshot.sessions.isEmpty {
+                Text(snapshot.isRefreshing ? "Refreshing..." : "No tmux sessions")
             } else {
-                Section("\(store.sessions.count) \(store.sessions.count == 1 ? "session" : "sessions")") {
-                    ForEach(store.compactSessions) { session in
+                Section("\(snapshot.sessions.count) \(snapshot.sessions.count == 1 ? "session" : "sessions")") {
+                    ForEach(snapshot.compactSessions) { session in
                         sessionMenu(for: session)
                     }
 
-                    if hiddenSessionCount > 0 {
-                        Button("\(hiddenSessionCount) more...") {
+                    if snapshot.hiddenSessionCount > 0 {
+                        Button("\(snapshot.hiddenSessionCount) more...") {
                             showSessions()
                         }
                     }
@@ -55,15 +57,26 @@ struct MenuBarContentView: View {
             }
         }
         .onAppear {
+            snapshot = MenuBarSnapshot(store: store)
             store.setMenuBarMenuPresented(true)
+        }
+        .onReceive(store.objectWillChange) { _ in
+            Task { @MainActor in
+                await Task.yield()
+                refreshSnapshotIfSessionSummaryChanged()
+            }
         }
         .onDisappear {
             store.setMenuBarMenuPresented(false)
         }
     }
 
-    private var hiddenSessionCount: Int {
-        max(0, store.sessions.count - store.compactSessions.count)
+    private func refreshSnapshotIfSessionSummaryChanged() {
+        let currentSignature = MenuBarSnapshot.sessionSignature(for: store.sessions)
+        guard currentSignature != snapshot.sessionSignature else {
+            return
+        }
+        snapshot = MenuBarSnapshot(store: store)
     }
 
     @ViewBuilder
@@ -73,11 +86,11 @@ struct MenuBarContentView: View {
                 showSessions(selecting: session)
             }
 
-            if !store.recentLinks(for: session).isEmpty {
+            if !snapshot.recentLinks(for: session).isEmpty {
                 linksMenu(for: session)
             }
 
-            if let metricsText = store.metricsText(for: session) {
+            if let metricsText = snapshot.metricsText(for: session) {
                 Divider()
                 Text(metricsText)
             }
@@ -99,7 +112,7 @@ struct MenuBarContentView: View {
     @ViewBuilder
     private func linksMenu(for session: TmuxSession) -> some View {
         Menu("Links") {
-            ForEach(store.recentLinks(for: session)) { link in
+            ForEach(snapshot.recentLinks(for: session)) { link in
                 Button(LinkMenuTitleFormatter.title(for: link.displayText)) {
                     open(link)
                 }
@@ -154,6 +167,72 @@ struct MenuBarContentView: View {
     }
 }
 
+struct MenuBarSnapshot {
+    var sessions: [TmuxSession]
+    var errorMessage: String?
+    var isRefreshing: Bool
+    private var recentLinksBySessionID: [String: [DetectedLogLink]]
+    private var metricsTextBySessionID: [String: String]
+
+    init(
+        sessions: [TmuxSession] = [],
+        errorMessage: String? = nil,
+        isRefreshing: Bool = false,
+        recentLinksBySessionID: [String: [DetectedLogLink]] = [:],
+        metricsTextBySessionID: [String: String] = [:]
+    ) {
+        self.sessions = sessions
+        self.errorMessage = errorMessage
+        self.isRefreshing = isRefreshing
+        self.recentLinksBySessionID = recentLinksBySessionID
+        self.metricsTextBySessionID = metricsTextBySessionID
+    }
+
+    @MainActor
+    init(store: MacTMUXStore) {
+        let sessions = store.sessions
+        self.sessions = sessions
+        self.errorMessage = store.errorMessage
+        self.isRefreshing = store.isRefreshing
+        self.recentLinksBySessionID = Dictionary(
+            uniqueKeysWithValues: sessions.map { session in
+                (session.id, store.recentLinks(for: session))
+            }
+        )
+        self.metricsTextBySessionID = Dictionary(
+            uniqueKeysWithValues: sessions.compactMap { session in
+                store.metricsText(for: session).map { (session.id, $0) }
+            }
+        )
+    }
+
+    var compactSessions: [TmuxSession] {
+        Array(sessions.prefix(5))
+    }
+
+    var hiddenSessionCount: Int {
+        max(0, sessions.count - compactSessions.count)
+    }
+
+    var sessionSignature: [String] {
+        Self.sessionSignature(for: sessions)
+    }
+
+    static func sessionSignature(for sessions: [TmuxSession]) -> [String] {
+        sessions.map { session in
+            "\(session.id)|\(session.name)|\(session.windows)"
+        }
+    }
+
+    func recentLinks(for session: TmuxSession) -> [DetectedLogLink] {
+        recentLinksBySessionID[session.id] ?? []
+    }
+
+    func metricsText(for session: TmuxSession) -> String? {
+        metricsTextBySessionID[session.id]
+    }
+}
+
 enum MenuBarSessionTitleFormatter {
     static let maximumLength = 30
 
@@ -169,13 +248,38 @@ enum MenuBarSessionTitleFormatter {
 private enum AppKitSessionActionConfirmer {
     @MainActor
     static func confirm(_ confirmation: SessionActionConfirmation) -> Bool {
+        let hadVisibleUserWindow = AppActivationController.hasVisibleUserWindow
+        AppActivationController.presentUserWindow()
+
+        defer {
+            if !hadVisibleUserWindow {
+                AppActivationController.returnToMenuBarIfNoUserWindowsAreVisible()
+            }
+        }
+
+        let alert = makeAlert(for: confirmation)
+        prepareAlertWindowForForeground(alert.window)
+
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @MainActor
+    private static func makeAlert(for confirmation: SessionActionConfirmation) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = confirmation.title
         alert.informativeText = confirmation.message
         alert.alertStyle = .warning
         alert.addButton(withTitle: confirmation.confirmationTitle)
         alert.addButton(withTitle: "Cancel")
+        return alert
+    }
 
-        return alert.runModal() == .alertFirstButtonReturn
+    @MainActor
+    private static func prepareAlertWindowForForeground(_ window: NSWindow) {
+        window.level = .modalPanel
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 }

@@ -11,6 +11,7 @@ struct SessionDetailView: View {
 
     @State private var filterCriteria = LogFilterCriteria()
     @State private var isLogOptionsPresented = false
+    @State private var isManualReloadingLogs = false
     @AppStorage("sessionOutputMode") private var outputModeRaw = SessionOutputMode.terminal.rawValue
     @AppStorage("wrapsLongLogLines") private var wrapsLongLogLines = false
 
@@ -41,8 +42,15 @@ struct SessionDetailView: View {
             isEnabled: outputMode == .logs,
             query: $filterCriteria.query
         ))
+        .onAppear {
+            refreshVisibleLogsIfNeeded()
+        }
         .onChange(of: session.id) { _, _ in
             filterCriteria = LogFilterCriteria()
+            refreshVisibleLogsIfNeeded()
+        }
+        .onChange(of: outputMode) { _, _ in
+            refreshVisibleLogsIfNeeded()
         }
     }
 
@@ -120,16 +128,39 @@ struct SessionDetailView: View {
 
     private var reloadLogsButton: some View {
         Button {
-            Task {
-                await store.refreshLatestLogs(for: session)
-            }
+            reloadLogsManually()
         } label: {
             ToolbarCommandLabel(title: "Reload", systemImage: "arrow.clockwise")
         }
         .controlSize(.small)
-        .disabled(store.isLoadingLogs)
+        .disabled(isManualReloadingLogs)
+        .transaction { transaction in
+            transaction.disablesAnimations = true
+        }
         .help("Reload logs")
         .accessibilityLabel("Reload logs")
+    }
+
+    private func reloadLogsManually() {
+        guard !isManualReloadingLogs else {
+            return
+        }
+
+        isManualReloadingLogs = true
+        Task { @MainActor in
+            await store.refreshLatestLogs(for: session)
+            isManualReloadingLogs = false
+        }
+    }
+
+    private func refreshVisibleLogsIfNeeded() {
+        guard outputMode == .logs else {
+            return
+        }
+
+        Task {
+            await store.refreshLatestLogs(for: session)
+        }
     }
 
     private var sessionHeader: some View {

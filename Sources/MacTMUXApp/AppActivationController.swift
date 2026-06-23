@@ -10,7 +10,7 @@ enum AppActivationController {
 
     static func presentUserWindow() {
         NSApplication.shared.setActivationPolicy(.regular)
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.activate()
     }
 
     static var hasVisibleUserWindow: Bool {

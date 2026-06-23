@@ -69,5 +69,13 @@ public actor TmuxClient {
         if respawnResult.exitCode != 0 {
             throw MacTMUXError.commandFailed(respawnResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        do {
+            let clearHistoryResult = try await runner.run(TmuxCommands.clearPaneHistory(session: session, paneTarget: paneTarget))
+            if clearHistoryResult.exitCode != 0 {
+                DiagnosticLog.write("clear pane history failed session=\(session.name) stderr=\(clearHistoryResult.stderr)")
+            }
+        } catch {
+            DiagnosticLog.write("clear pane history failed session=\(session.name) error=\(error.localizedDescription)")
+        }
     }
 }

@@ -149,7 +149,35 @@ struct SessionsWindowView: View {
     }
 
     private func handleStoppedSessions(_ stoppedIDs: Set<String>) {
-        selectedSessionIDs.subtract(stoppedIDs)
-        pruneSelectedSessionIDs()
+        let previousSelection = selectedSessionIDs
+        selectedSessionIDs = StoppedSessionSelectionResolver.resolvedSelection(
+            currentSelection: selectedSessionIDs,
+            stoppedIDs: stoppedIDs,
+            sessions: store.sessions
+        )
+
+        focusSessionAfterSelectionChange(from: previousSelection, to: selectedSessionIDs)
+    }
+}
+
+enum StoppedSessionSelectionResolver {
+    static func resolvedSelection(
+        currentSelection: Set<String>,
+        stoppedIDs: Set<String>,
+        sessions: [TmuxSession]
+    ) -> Set<String> {
+        let validSessionIDs = Set(sessions.map(\.id))
+        let retainedSelection = currentSelection
+            .subtracting(stoppedIDs)
+            .intersection(validSessionIDs)
+
+        if !retainedSelection.isEmpty {
+            return retainedSelection
+        }
+
+        guard let fallbackSession = sessions.first(where: { !stoppedIDs.contains($0.id) }) else {
+            return []
+        }
+        return [fallbackSession.id]
     }
 }

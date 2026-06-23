@@ -143,4 +143,15 @@ public enum TmuxCommands {
             ]
         )
     }
+
+    public static func clearPaneHistory(session: TmuxSession, paneTarget: String) -> CommandSpec {
+        CommandSpec(
+            executable: session.server.binaryPath,
+            arguments: serverArguments(for: session.server) + [
+                "clear-history",
+                "-t",
+                paneTarget
+            ]
+        )
+    }
 }

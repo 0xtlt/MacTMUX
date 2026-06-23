@@ -9,8 +9,7 @@ struct MacTMUXApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContentView()
-                .environmentObject(store)
+            MenuBarContentView(store: store)
         } label: {
             MenuBarStatusLabel(sessionCount: store.sessions.count, showsSessionCount: showMenuBarSessionCount)
                 .background {
