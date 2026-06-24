@@ -79,16 +79,36 @@ final class MacTMUXCoreTests: XCTestCase {
 
         let list = TmuxCommands.listSessions(server: server)
         let kill = TmuxCommands.killSession(session: session)
+        let attach = TmuxCommands.attachSession(session: session)
         let capture = TmuxCommands.capturePane(session: session, lines: 50)
+        let visibleCapture = TmuxCommands.captureVisiblePane(session: session)
         let panes = TmuxCommands.listPanes(session: session)
+        let clearHistory = TmuxCommands.clearPaneHistory(session: session, paneTarget: "api:0.0")
 
         XCTAssertEqual(list.executable, "/opt/homebrew/bin/tmux")
         XCTAssertEqual(list.arguments.prefix(2), ["-L", "main"])
         XCTAssertEqual(kill.arguments.suffix(2), ["-t", "api; rm -rf /"])
+        XCTAssertEqual(attach.arguments.suffix(3), ["attach-session", "-t", "api; rm -rf /"])
         XCTAssertEqual(capture.arguments.suffix(6), ["-S", "-50", "-E", "-", "-t", "api; rm -rf /"])
+        XCTAssertEqual(visibleCapture.arguments.suffix(4), ["capture-pane", "-pe", "-t", "api; rm -rf /"])
         XCTAssertEqual(Array(panes.arguments.dropFirst(2).prefix(4)), ["list-panes", "-s", "-t", "api; rm -rf /"])
+        XCTAssertEqual(clearHistory.arguments.suffix(3), ["clear-history", "-t", "api:0.0"])
         XCTAssertFalse(kill.arguments.contains("sh"))
         XCTAssertFalse(kill.arguments.contains("-c"))
+    }
+
+    func testRestartActivePaneClearsPaneHistoryAfterRespawn() async throws {
+        let runner = RestartRecordingCommandRunner()
+        let client = TmuxClient(runner: runner)
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "api", windows: 1, attached: false, createdAt: .now)
+
+        try await client.restartActivePane(session: session)
+
+        let commands = await runner.recordedCommands()
+        XCTAssertEqual(commands.map(\.arguments.first), ["display-message", "respawn-pane", "clear-history"])
+        XCTAssertEqual(commands[1].arguments.suffix(4), ["respawn-pane", "-k", "-t", "api:0.0"])
+        XCTAssertEqual(commands[2].arguments.suffix(3), ["clear-history", "-t", "api:0.0"])
     }
 
     func testBuildsCapturePaneWithExplicitRange() {
@@ -174,6 +194,39 @@ final class MacTMUXCoreTests: XCTestCase {
         let links = LogLinkDetector.detectLinks(in: "ready on localhost:5173/app")
 
         XCTAssertEqual(links.map(\.urlString), ["http://localhost:5173/app"])
+    }
+
+    func testDoesNotDetectRequestPathsWithoutBaseURL() {
+        let links = LogLinkDetector.detectLinks(in: "15:48:03 Request » GET 200 /collections/news")
+
+        XCTAssertTrue(links.isEmpty)
+    }
+
+    func testDetectsRequestPathsWithBaseURL() throws {
+        let baseURL = try XCTUnwrap(URL(string: "http://localhost:9292"))
+        let input = """
+        15:48:03 Request » GET 200 /collections/news
+        15:48:04 Request » GET 404 /products/le-faitout
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input, baseURL: baseURL)
+
+        XCTAssertEqual(links.map(\.urlString), [
+            "http://localhost:9292/products/le-faitout",
+            "http://localhost:9292/collections/news"
+        ])
+    }
+
+    func testSkipsSecretBearingRequestPathLinks() throws {
+        let baseURL = try XCTUnwrap(URL(string: "http://localhost:9292"))
+        let input = """
+        GET 200 /callback?token=abc
+        GET 200 /safe?state=ok
+        """
+
+        let links = LogLinkDetector.detectLinks(in: input, baseURL: baseURL)
+
+        XCTAssertEqual(links.map(\.urlString), ["http://localhost:9292/safe?state=ok"])
     }
 
     func testTrimsTrailingPunctuationFromDetectedLinks() {
@@ -451,5 +504,21 @@ final class MacTMUXCoreTests: XCTestCase {
             LogLine(id: "4", text: "debug trace enabled", level: .debug, sequence: 4),
             LogLine(id: "5", text: "plain text", level: .plain, sequence: 5)
         ]
+    }
+}
+
+private actor RestartRecordingCommandRunner: CommandRunning {
+    private var commands: [CommandSpec] = []
+
+    func run(_ command: CommandSpec) async throws -> CommandResult {
+        commands.append(command)
+        if command.arguments.contains("display-message") {
+            return CommandResult(stdout: "api:0.0\n", stderr: "", exitCode: 0)
+        }
+        return CommandResult(stdout: "", stderr: "", exitCode: 0)
+    }
+
+    func recordedCommands() -> [CommandSpec] {
+        commands
     }
 }

@@ -26,6 +26,18 @@ public enum TmuxCommands {
         capturePane(session: session, startLine: -lines, endLine: -1)
     }
 
+    public static func captureVisiblePane(session: TmuxSession) -> CommandSpec {
+        CommandSpec(
+            executable: session.server.binaryPath,
+            arguments: serverArguments(for: session.server) + [
+                "capture-pane",
+                "-pe",
+                "-t",
+                session.name
+            ]
+        )
+    }
+
     public static func capturePane(session: TmuxSession, startLine: Int, endLine: Int) -> CommandSpec {
         CommandSpec(
             executable: session.server.binaryPath,
@@ -81,6 +93,17 @@ public enum TmuxCommands {
         )
     }
 
+    public static func attachSession(session: TmuxSession) -> CommandSpec {
+        CommandSpec(
+            executable: session.server.binaryPath,
+            arguments: serverArguments(for: session.server) + [
+                "attach-session",
+                "-t",
+                session.name
+            ]
+        )
+    }
+
     private static func endLineArgument(_ endLine: Int) -> String {
         endLine == -1 ? "-" : "\(endLine)"
     }
@@ -115,6 +138,17 @@ public enum TmuxCommands {
             arguments: serverArguments(for: session.server) + [
                 "respawn-pane",
                 "-k",
+                "-t",
+                paneTarget
+            ]
+        )
+    }
+
+    public static func clearPaneHistory(session: TmuxSession, paneTarget: String) -> CommandSpec {
+        CommandSpec(
+            executable: session.server.binaryPath,
+            arguments: serverArguments(for: session.server) + [
+                "clear-history",
                 "-t",
                 paneTarget
             ]

@@ -1,6 +1,6 @@
 # MacTMUX
 
-MacTMUX is a native macOS menu bar utility for tmux sessions.
+MacTMUX is a native macOS 26+ SwiftUI menu bar utility for tmux sessions.
 
 V1 features:
 

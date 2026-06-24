@@ -1,10 +1,10 @@
-import AppKit
 import MacTMUXCore
 import SwiftUI
 
 struct SessionLinksControl: View {
+    @Environment(\.openURL) private var openURL
+
     var links: [DetectedLogLink]
-    var isHighlighted = false
 
     var body: some View {
         Group {
@@ -12,9 +12,11 @@ struct SessionLinksControl: View {
                 Button {
                     open(link)
                 } label: {
-                    iconLabel(systemImage: "link")
+                    Image(systemName: "link")
+                        .frame(width: 28, height: 26)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .controlSize(.small)
                 .help(link.urlString)
             } else if links.count > 1 {
                 Menu {
@@ -31,31 +33,14 @@ struct SessionLinksControl: View {
                             .font(.system(size: 8, weight: .bold))
                     }
                     .frame(width: 34, height: 26)
-                    .foregroundStyle(controlColor)
-                    .background(controlBackground, in: RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .controlSize(.small)
                 .menuStyle(.borderlessButton)
                 .help("\(links.count) links")
             }
         }
         .fixedSize()
-    }
-
-    private var controlColor: Color {
-        isHighlighted ? .white : .secondary
-    }
-
-    private var controlBackground: Color {
-        isHighlighted ? Color.white.opacity(0.16) : Color.primary.opacity(0.06)
-    }
-
-    private func iconLabel(systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 13, weight: .semibold))
-            .frame(width: 28, height: 26)
-            .foregroundStyle(controlColor)
-            .background(controlBackground, in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func open(_ link: DetectedLogLink) {
@@ -64,7 +49,7 @@ struct SessionLinksControl: View {
               scheme == "http" || scheme == "https" else {
             return
         }
-        NSWorkspace.shared.open(url)
+        openURL(url)
     }
 
     private func menuTitle(for link: DetectedLogLink) -> String {

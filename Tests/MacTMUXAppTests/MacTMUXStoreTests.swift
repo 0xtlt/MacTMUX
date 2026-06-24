@@ -109,6 +109,93 @@ final class MacTMUXStoreTests: XCTestCase {
         XCTAssertEqual(store.logLines.map(\.text), ["dev log"])
     }
 
+    func testRestartReloadsLogsFromCleanInitialCapture() async {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "app", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [
+                pane.id: "sqlite error before restart\n$ node ace serve --hmr\n"
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+
+        await store.select(session)
+        await client.setLogsByPaneID([
+            pane.id: "$ node ace serve --hmr\nserver ready after restart\n"
+        ])
+        await store.restart(session)
+
+        XCTAssertEqual(store.logLines.map(\.text), [
+            "$ node ace serve --hmr",
+            "server ready after restart"
+        ])
+    }
+
+    func testSelectSessionCachesLinksFromLoadedLogs() async {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "app", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [
+                pane.id: "ready on localhost:5173/app\napi https://example.com/newer\n"
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+
+        await store.select(session)
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), [
+            "https://example.com/newer",
+            "http://localhost:5173/app"
+        ])
+    }
+
+    func testSelectSessionCachesRelativeRequestLinksAfterBaseURLAppears() async {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "app", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [
+                pane.id: """
+                15:48:03 Request » GET 200 /collections/news
+                ready on http://localhost:9292
+                15:48:04 Request » GET 404 /products/le-faitout
+                """
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+
+        await store.select(session)
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), [
+            "http://localhost:9292/products/le-faitout",
+            "http://localhost:9292",
+            "http://localhost:9292/collections/news"
+        ])
+    }
+
     func testSelectPaneReloadsLogsForThatPane() async {
         let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
         let session = TmuxSession(server: server, name: "app", windows: 2, attached: false, createdAt: .now)
@@ -170,6 +257,42 @@ final class MacTMUXStoreTests: XCTestCase {
         XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), ["http://localhost:53660"])
     }
 
+    func testSelectingPaneWithoutLinksPreservesSessionLinksFromOtherPanes() async throws {
+        let fixture = try TemporaryTmuxBinary()
+        defer {
+            fixture.remove()
+        }
+
+        let server = TmuxServer(binaryPath: fixture.tmuxPath)
+        let session = TmuxSession(server: server, name: "app", windows: 2, attached: false, createdAt: .now)
+        let devPane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let workerPane = makePane(session: session, paneID: "%2", windowIndex: 1, windowName: "queue")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [devPane, workerPane]],
+            logsByPaneID: [
+                devPane.id: "Server address: http://localhost:53660\n",
+                workerPane.id: "[ info ] Starting worker for queues: default\n"
+            ]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+        store.tmuxPathSetting = fixture.tmuxPath
+        defer {
+            store.resetTmuxPathToAutodetect()
+        }
+
+        await store.refresh()
+        await store.select(session)
+        await store.selectPane(workerPane, for: session)
+
+        XCTAssertEqual(store.recentLinks(for: session).map(\.urlString), ["http://localhost:53660"])
+    }
+
     func testRefreshPrunesRecentLinksForRemovedSessions() async throws {
         let fixture = try TemporaryTmuxBinary()
         defer {
@@ -211,6 +334,120 @@ final class MacTMUXStoreTests: XCTestCase {
         XCTAssertEqual(store.recentLinks(for: secondSession).map(\.urlString), [
             "https://second.example.com"
         ])
+    }
+
+    func testMetricsFailureDoesNotSetGlobalError() async throws {
+        let fixture = try TemporaryTmuxBinary()
+        defer {
+            fixture.remove()
+        }
+
+        let server = TmuxServer(binaryPath: fixture.tmuxPath)
+        let session = TmuxSession(
+            server: server,
+            name: "app",
+            windows: 1,
+            attached: false,
+            createdAt: .now,
+            activePanePID: 123
+        )
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [pane.id: "ready\n"]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: FailingMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false
+        )
+        store.tmuxPathSetting = fixture.tmuxPath
+        defer {
+            store.resetTmuxPathToAutodetect()
+        }
+
+        await store.refresh()
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.metricsErrorMessage, "metrics unavailable")
+    }
+
+    func testRefreshLoopUpdatesSessionsWhileMenuBarMenuIsPresented() async throws {
+        let fixture = try TemporaryTmuxBinary()
+        defer {
+            fixture.remove()
+        }
+
+        let server = TmuxServer(binaryPath: fixture.tmuxPath)
+        let session = TmuxSession(server: server, name: "menu-dev", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [pane.id: "ready\n"]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false,
+            minimumRefreshInterval: 0.01
+        )
+        let previousInterval = store.refreshInterval
+        store.refreshInterval = 0.01
+        store.tmuxPathSetting = fixture.tmuxPath
+        store.setMenuBarMenuPresented(true)
+        defer {
+            store.refreshInterval = previousInterval
+            store.resetTmuxPathToAutodetect()
+        }
+
+        let refreshLoop = Task { @MainActor in
+            await store.startRefreshLoop()
+        }
+        defer {
+            refreshLoop.cancel()
+        }
+
+        try await waitForCondition {
+            store.sessions.map(\.id) == [session.id]
+        }
+
+        XCTAssertEqual(store.sessions.map(\.name), ["menu-dev"])
+    }
+
+    func testLogRefreshLoopUpdatesSelectedLogsWhileMenuBarMenuIsPresented() async throws {
+        let server = TmuxServer(binaryPath: "/opt/homebrew/bin/tmux")
+        let session = TmuxSession(server: server, name: "log-dev", windows: 1, attached: false, createdAt: .now)
+        let pane = makePane(session: session, paneID: "%1", windowIndex: 0, windowName: "dev")
+        let client = ConfigurableTmuxClient(
+            sessions: [session],
+            panesBySessionID: [session.id: [pane]],
+            logsByPaneID: [pane.id: "batch 1\n"]
+        )
+        let store = MacTMUXStore(
+            client: client,
+            metricsClient: EmptyMetricsClient(),
+            refreshOnInit: false,
+            startBackgroundTasks: false,
+            logRefreshInterval: 0.01
+        )
+        store.setMenuBarMenuPresented(true)
+
+        await store.select(session)
+        await client.setLogsByPaneID([pane.id: "batch 1\nbatch 2\n"])
+        let refreshLoop = Task { @MainActor in
+            await store.startLogRefreshLoop()
+        }
+        defer {
+            refreshLoop.cancel()
+        }
+
+        try await waitForCondition {
+            store.logLines.map(\.text).contains("batch 2")
+        }
     }
 }
 
@@ -272,6 +509,10 @@ private actor ConfigurableTmuxClient: TmuxClientProviding {
         self.sessions = sessions
     }
 
+    func setLogsByPaneID(_ logsByPaneID: [String: String]) {
+        self.logsByPaneID = logsByPaneID
+    }
+
     func listSessions(server: TmuxServer) async throws -> [TmuxSession] {
         sessions
     }
@@ -329,6 +570,28 @@ private func makePane(
 private actor EmptyMetricsClient: ProcessMetricsProviding {
     func metrics(forRootPIDs rootPIDs: [Int32]) async throws -> [Int32: ProcessResourceMetrics] {
         [:]
+    }
+}
+
+private actor FailingMetricsClient: ProcessMetricsProviding {
+    func metrics(forRootPIDs rootPIDs: [Int32]) async throws -> [Int32: ProcessResourceMetrics] {
+        throw MacTMUXError.commandFailed("metrics unavailable")
+    }
+}
+
+@MainActor
+private func waitForCondition(
+    timeout: Duration = .seconds(1),
+    interval: Duration = .milliseconds(10),
+    condition: @escaping @MainActor () -> Bool
+) async throws {
+    let start = ContinuousClock.now
+    while !condition() {
+        if start.duration(to: .now) > timeout {
+            XCTFail("Timed out waiting for condition")
+            return
+        }
+        try await Task.sleep(for: interval)
     }
 }
 
