@@ -14,22 +14,26 @@ enum AppActivationController {
     }
 
     static var hasVisibleUserWindow: Bool {
-        NSApplication.shared.windows.contains { window in
-            window.isVisible && window.title.hasPrefix("MacTMUX")
-        }
+        AppWindowPresenter.shared.hasVisibleUserWindow
     }
 
     static func requestSessionsWindow() {
-        NotificationCenter.default.post(name: openSessionsWindowNotification, object: nil)
-    }
-
-    static func returnToMenuBarIfNoUserWindowsAreVisible() {
-        if !hasVisibleUserWindow {
-            NSApplication.shared.setActivationPolicy(.accessory)
+        if let store = MacTMUXApplicationDelegate.shared?.store {
+            AppWindowPresenter.shared.showSessions(store: store)
+        } else {
+            NotificationCenter.default.post(name: openSessionsWindowNotification, object: nil)
         }
     }
 
+    static func returnToMenuBarIfNoUserWindowsAreVisible() {
+        AppWindowPresenter.shared.returnToMenuBarIfNoUserWindowsAreVisible()
+    }
+
     static func terminate() {
-        NSApplication.shared.terminate(nil)
+        if let applicationDelegate = MacTMUXApplicationDelegate.shared {
+            applicationDelegate.requestFullQuit()
+        } else {
+            NSApplication.shared.terminate(nil)
+        }
     }
 }

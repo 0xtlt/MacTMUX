@@ -228,16 +228,16 @@ struct SessionDetailView: View {
                     requestStopSelectedSessions()
                 } label: {
                     Label("Stop \(selectedSessions.count)", systemImage: "power")
+                        .foregroundStyle(.red)
                 }
-                .tint(.red)
                 .help("Stop selected sessions")
             } else {
                 Button {
                     requestStop(session)
                 } label: {
                     Label("Stop", systemImage: "power")
+                        .foregroundStyle(.red)
                 }
-                .tint(.red)
                 .help("Stop session")
             }
         }

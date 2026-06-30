@@ -69,8 +69,8 @@ struct SessionsSidebarView: View {
 }
 
 enum SidebarWidth {
-    static let defaultValue: CGFloat = 280
     static let minimum: CGFloat = 220
+    static let defaultValue: CGFloat = minimum
     static let maximum: CGFloat = 360
 }
 

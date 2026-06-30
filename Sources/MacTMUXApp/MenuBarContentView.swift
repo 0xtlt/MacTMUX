@@ -3,59 +3,33 @@ import MacTMUXCore
 import SwiftUI
 
 struct MenuBarContentView: View {
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.openURL) private var openURL
-    @Environment(\.openWindow) private var openWindow
-    let store: MacTMUXStore
+    @EnvironmentObject private var store: MacTMUXStore
     @State private var snapshot = MenuBarSnapshot()
 
     var body: some View {
-        Group {
-            Button("Show All") {
-                showSessions()
-            }
-
-            Button(snapshot.isRefreshing ? "Refreshing..." : "Refresh") {
-                Task { @MainActor in
-                    await store.refresh()
-                    snapshot = MenuBarSnapshot(store: store)
-                }
-            }
-            .disabled(snapshot.isRefreshing)
-
-            Button("Settings...") {
-                AppActivationController.presentUserWindow()
-                openSettings()
-            }
-
-            Divider()
+        VStack(spacing: 0) {
+            header
 
             if let errorMessage = snapshot.errorMessage {
-                Text("Error: \(menuTitle(errorMessage))")
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
             }
 
-            if snapshot.sessions.isEmpty {
-                Text(snapshot.isRefreshing ? "Refreshing..." : "No tmux sessions")
-            } else {
-                Section("\(snapshot.sessions.count) \(snapshot.sessions.count == 1 ? "session" : "sessions")") {
-                    ForEach(snapshot.compactSessions) { session in
-                        sessionMenu(for: session)
-                    }
-
-                    if snapshot.hiddenSessionCount > 0 {
-                        Button("\(snapshot.hiddenSessionCount) more...") {
-                            showSessions()
-                        }
-                    }
-                }
-            }
+            sessionsList
 
             Divider()
+                .padding(.top, 10)
 
-            Button("Quit MacTMUX") {
-                AppActivationController.terminate()
-            }
+            footer
         }
+        .frame(width: 380)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             snapshot = MenuBarSnapshot(store: store)
             store.setMenuBarMenuPresented(true)
@@ -71,6 +45,101 @@ struct MenuBarContentView: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "terminal.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("MacTMUX")
+                    .font(.headline)
+                Text("\(snapshot.sessions.count) \(snapshot.sessions.count == 1 ? "session" : "sessions")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            iconButton("Refresh", systemImage: snapshot.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise") {
+                Task {
+                    await store.refresh()
+                    snapshot = MenuBarSnapshot(store: store)
+                }
+            }
+            .disabled(snapshot.isRefreshing)
+
+            iconButton("Settings", systemImage: "gearshape") {
+                AppWindowPresenter.shared.showSettings(store: store)
+            }
+        }
+        .padding(12)
+    }
+
+    private var sessionsList: some View {
+        VStack(spacing: 8) {
+            if snapshot.sessions.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "rectangle.dashed")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                    Text(snapshot.isRefreshing ? "Refreshing..." : "No tmux sessions")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 112)
+            } else {
+                ForEach(snapshot.compactSessions) { session in
+                    MenuSessionRow(
+                        session: session,
+                        links: snapshot.recentLinks(for: session),
+                        metricsText: snapshot.metricsText(for: session)
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Button {
+                showSessions()
+            } label: {
+                Label("Show All", systemImage: "sidebar.left")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                AppActivationController.terminate()
+            } label: {
+                Label("Quit", systemImage: "power")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(12)
+    }
+
+    private func iconButton(_ help: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.primary.opacity(0.08))
+        )
+        .help(help)
+    }
+
     private func refreshSnapshotIfSessionSummaryChanged() {
         let currentSignature = MenuBarSnapshot.sessionSignature(for: store.sessions)
         guard currentSignature != snapshot.sessionSignature else {
@@ -79,76 +148,85 @@ struct MenuBarContentView: View {
         snapshot = MenuBarSnapshot(store: store)
     }
 
-    @ViewBuilder
-    private func sessionMenu(for session: TmuxSession) -> some View {
-        Menu {
-            Button("Open") {
-                showSessions(selecting: session)
-            }
-
-            if !snapshot.recentLinks(for: session).isEmpty {
-                linksMenu(for: session)
-            }
-
-            if let metricsText = snapshot.metricsText(for: session) {
-                Divider()
-                Text(metricsText)
-            }
-
-            Divider()
-
-            Button("Restart") {
-                confirmAndPerform(.restart(session))
-            }
-
-            Button("Stop", role: .destructive) {
-                confirmAndPerform(.stop([session]))
-            }
-        } label: {
-            Label(MenuBarSessionTitleFormatter.title(for: session.name), systemImage: "terminal")
-        }
-    }
-
-    @ViewBuilder
-    private func linksMenu(for session: TmuxSession) -> some View {
-        Menu("Links") {
-            ForEach(snapshot.recentLinks(for: session)) { link in
-                Button(LinkMenuTitleFormatter.title(for: link.displayText)) {
-                    open(link)
-                }
-            }
-        }
-    }
-
     private func showSessions() {
-        AppActivationController.presentUserWindow()
-        Task {
-            await store.refresh()
-            openWindow(id: MacTMUXWindowID.sessions)
-            AppActivationController.presentUserWindow()
+        AppWindowPresenter.shared.showSessions(store: store)
+    }
+}
+
+private struct MenuSessionRow: View {
+    @EnvironmentObject private var store: MacTMUXStore
+    var session: TmuxSession
+    var links: [DetectedLogLink]
+    var metricsText: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                AppWindowPresenter.shared.showSessions(store: store, selecting: session)
+            } label: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.green.opacity(0.25), lineWidth: 3)
+                        )
+                        .help("Running")
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.name)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            SessionLinksControl(links: links)
+
+            Button {
+                confirmAndPerform(.restart(session))
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("Restart")
+
+            Button {
+                confirmAndPerform(.stop([session]))
+            } label: {
+                Image(systemName: "power")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .help("Stop")
         }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.primary.opacity(0.07))
+        )
     }
 
-    private func showSessions(selecting session: TmuxSession) {
-        AppActivationController.presentUserWindow()
-        Task {
-            await store.select(session)
-            openWindow(id: MacTMUXWindowID.sessions)
-            AppActivationController.presentUserWindow()
+    private var subtitle: String {
+        var parts = [
+            session.createdAt.formatted(date: .omitted, time: .shortened)
+        ]
+        if let metricsText {
+            parts.append(metricsText)
         }
-    }
-
-    private func open(_ link: DetectedLogLink) {
-        guard let url = link.url,
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" else {
-            return
-        }
-        openURL(url)
-    }
-
-    private func menuTitle(_ value: String) -> String {
-        MenuBarSessionTitleFormatter.title(for: value)
+        return parts.joined(separator: " · ")
     }
 
     private func confirmAndPerform(_ confirmation: SessionActionConfirmation) {

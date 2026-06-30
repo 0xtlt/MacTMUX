@@ -13,10 +13,9 @@ struct SessionLinksControl: View {
                     open(link)
                 } label: {
                     Image(systemName: "link")
-                        .frame(width: 28, height: 26)
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                .buttonStyle(.plain)
                 .help(link.urlString)
             } else if links.count > 1 {
                 Menu {
@@ -32,10 +31,9 @@ struct SessionLinksControl: View {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .bold))
                     }
-                    .frame(width: 34, height: 26)
+                    .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                .buttonStyle(.plain)
                 .menuStyle(.borderlessButton)
                 .help("\(links.count) links")
             }
