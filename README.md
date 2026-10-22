@@ -2,6 +2,8 @@
 
 MacTMUX is a native macOS 26+ SwiftUI menu bar utility for tmux sessions.
 
+Requirements: macOS 26+ on a Mac with Apple Silicon (M1 or later). Intel Macs are not supported.
+
 V1 features:
 
 - Shows the five newest tmux sessions in the menu bar.

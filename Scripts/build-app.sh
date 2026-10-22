@@ -5,10 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="MacTMUX"
 BIN_NAME="MacTMUX"
 PROFILE="debug"
-ARCH=""
+ARCH="arm64"
 
 usage() {
-  echo "usage: $0 [--release] [arm64|x86_64]" >&2
+  echo "usage: $0 [--release] [arm64]" >&2
+  echo "MacTMUX supports Apple Silicon (arm64) only." >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -19,8 +20,12 @@ while [[ $# -gt 0 ]]; do
     debug|release)
       PROFILE="$1"
       ;;
-    arm64|x86_64)
+    arm64)
       ARCH="$1"
+      ;;
+    x86_64)
+      echo "unsupported arch: $1 (MacTMUX supports Apple Silicon arm64 only)" >&2
+      exit 2
       ;;
     *)
       usage
@@ -30,30 +35,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$PROFILE" == "release" && -z "$ARCH" ]]; then
-  ARCH="$(uname -m)"
-fi
-
-case "$ARCH" in
-  ""|arm64|x86_64)
-    ;;
-  *)
-    echo "unsupported arch: $ARCH" >&2
-    exit 2
-    ;;
-esac
-
-BUILD_ARGS=(-c "$PROFILE")
-if [[ -n "$ARCH" ]]; then
-  BUILD_ARGS+=(--arch "$ARCH")
-fi
+BUILD_ARGS=(-c "$PROFILE" --arch "$ARCH")
 
 DIST_DIR="$ROOT_DIR/dist"
-if [[ -n "$ARCH" ]]; then
-  PRODUCT_DIR="$ROOT_DIR/.build/$ARCH-apple-macosx/$PROFILE"
-else
-  PRODUCT_DIR="$ROOT_DIR/.build/$PROFILE"
-fi
 
 if [[ "$PROFILE" == "release" ]]; then
   APP_DIR="$DIST_DIR/$APP_NAME.app"
@@ -70,8 +54,9 @@ LIBGHOSTTY_VT="$ROOT_DIR/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
 
 cd "$ROOT_DIR"
 
-echo "Building $APP_NAME ($PROFILE${ARCH:+, $ARCH})..."
+echo "Building $APP_NAME ($PROFILE, $ARCH)..."
 swift build "${BUILD_ARGS[@]}"
+PRODUCT_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 
 echo "Creating app bundle..."
 rm -rf "$APP_DIR"
