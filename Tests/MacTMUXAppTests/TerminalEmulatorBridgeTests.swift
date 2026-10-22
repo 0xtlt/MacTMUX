@@ -1,9 +1,20 @@
 import AppKit
+import MacTMUXGhosttyBridge
 @testable import MacTMUXApp
 import XCTest
 
 @MainActor
 final class TerminalEmulatorBridgeTests: XCTestCase {
+    private static let vendoredLibraryPath: String = {
+        // Tests/MacTMUXAppTests/<this file> -> repo root is three levels up.
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Vendor/GhosttyVT/lib/libghostty-vt.dylib")
+            .path
+    }()
+
     func testPlainTextFallbackStatusWhenNativeBridgeIsUnavailable() {
         let bridge = TerminalEmulatorBridge(nativeBridge: nil)
 
@@ -55,7 +66,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyRendersAnsiWithoutRawEscapeSequences() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -72,7 +83,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyPreservesAnsiForegroundColor() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -93,7 +104,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyRendersTmuxAttachFrame() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -128,7 +139,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyHandlesInteractiveRedrawBurst() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -167,7 +178,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyRedrawClearsPreviousFrameText() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -190,8 +201,66 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
         XCTAssertFalse(output.contains("unchanged old line"))
     }
 
+    func testVendoredLibGhosttyPlainRenderOfEmptyTerminalSucceedsWithZeroBytes() throws {
+        let terminal = try makeNativeTerminal()
+        defer {
+            MCTGhosttyVTTerminalFree(terminal.terminal)
+            MCTGhosttyVTBridgeFree(terminal.bridge)
+        }
+
+        let output = try XCTUnwrap(plainRender(terminal.terminal, Data()))
+
+        XCTAssertEqual(output, "")
+    }
+
+    func testVendoredLibGhosttyPlainRenderOfClearedTerminalSucceedsWithZeroBytes() throws {
+        let terminal = try makeNativeTerminal()
+        defer {
+            MCTGhosttyVTTerminalFree(terminal.terminal)
+            MCTGhosttyVTBridgeFree(terminal.bridge)
+        }
+
+        XCTAssertEqual(try XCTUnwrap(plainRender(terminal.terminal, Data("hello".utf8))), "hello")
+        let cleared = try XCTUnwrap(plainRender(terminal.terminal, Data("\u{1B}[H\u{1B}[2J".utf8)))
+
+        XCTAssertEqual(cleared, "")
+    }
+
+    private func makeNativeTerminal() throws -> (bridge: OpaquePointer, terminal: OpaquePointer) {
+        let libraryPath = Self.vendoredLibraryPath
+        guard FileManager.default.fileExists(atPath: libraryPath) else {
+            throw XCTSkip("Vendored libghostty-vt dylib is not available.")
+        }
+        let bridge = try XCTUnwrap(libraryPath.withCString { MCTGhosttyVTBridgeCreate($0) })
+        guard let terminal = MCTGhosttyVTTerminalCreate(bridge, 80, 20) else {
+            MCTGhosttyVTBridgeFree(bridge)
+            throw XCTSkip("Could not create libghostty-vt terminal.")
+        }
+        return (bridge, terminal)
+    }
+
+    /// Returns nil when the C bridge reports failure; otherwise the (possibly empty) rendered text.
+    private func plainRender(_ terminal: OpaquePointer, _ data: Data) -> String? {
+        var pointer: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        let ok = data.withUnsafeBytes { bytes in
+            MCTGhosttyVTTerminalRender(
+                terminal,
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                data.count,
+                &pointer,
+                &length
+            )
+        }
+        guard ok, let pointer else {
+            return nil
+        }
+        defer { MCTGhosttyVTBufferFree(pointer) }
+        return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+    }
+
     func testVendoredLibGhosttyDoesNotExposeScrollbackAsCurrentScreen() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
@@ -212,7 +281,7 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
     }
 
     func testVendoredLibGhosttyFormatsOnlyViewportAfterTmuxScrollRefresh() throws {
-        let libraryPath = "/Users/thomastastet/.codex/worktrees/d0fb/MacTMUX/Vendor/GhosttyVT/lib/libghostty-vt.dylib"
+        let libraryPath = Self.vendoredLibraryPath
         guard FileManager.default.fileExists(atPath: libraryPath) else {
             throw XCTSkip("Vendored libghostty-vt dylib is not available.")
         }
