@@ -425,18 +425,20 @@ bool MCTGhosttyVTTerminalRenderFormat(MCTGhosttyVTTerminal *terminal,
           selection_options,
           &ghostty_ptr,
           &ghostty_len
-        ) == GHOSTTY_SUCCESS &&
-        ghostty_ptr != NULL) {
-      uint8_t *copy = malloc(ghostty_len);
+        ) == GHOSTTY_SUCCESS) {
+      // Empty output may come back as success with a NULL pointer and zero length.
+      uint8_t *copy = malloc(ghostty_len > 0 ? ghostty_len : 1);
       if (copy != NULL) {
-        memcpy(copy, ghostty_ptr, ghostty_len);
+        if (ghostty_ptr != NULL && ghostty_len > 0) {
+          memcpy(copy, ghostty_ptr, ghostty_len);
+        }
         *out_ptr = copy;
         *out_len = ghostty_len;
-        bridge->ghostty_free(NULL, ghostty_ptr, ghostty_len);
-        return true;
       }
-      bridge->ghostty_free(NULL, ghostty_ptr, ghostty_len);
-      return false;
+      if (ghostty_ptr != NULL) {
+        bridge->ghostty_free(NULL, ghostty_ptr, ghostty_len);
+      }
+      return copy != NULL;
     }
   }
 
@@ -475,16 +477,20 @@ bool MCTGhosttyVTTerminalRenderFormat(MCTGhosttyVTTerminal *terminal,
   uint8_t *ghostty_ptr = NULL;
   size_t ghostty_len = 0;
   bool ok = false;
-  if (bridge->formatter_format_alloc(formatter, NULL, &ghostty_ptr, &ghostty_len) == GHOSTTY_SUCCESS &&
-      ghostty_ptr != NULL) {
-    uint8_t *copy = malloc(ghostty_len);
+  if (bridge->formatter_format_alloc(formatter, NULL, &ghostty_ptr, &ghostty_len) == GHOSTTY_SUCCESS) {
+    // Empty output may come back as success with a NULL pointer and zero length.
+    uint8_t *copy = malloc(ghostty_len > 0 ? ghostty_len : 1);
     if (copy != NULL) {
-      memcpy(copy, ghostty_ptr, ghostty_len);
+      if (ghostty_ptr != NULL && ghostty_len > 0) {
+        memcpy(copy, ghostty_ptr, ghostty_len);
+      }
       *out_ptr = copy;
       *out_len = ghostty_len;
       ok = true;
     }
-    bridge->ghostty_free(NULL, ghostty_ptr, ghostty_len);
+    if (ghostty_ptr != NULL) {
+      bridge->ghostty_free(NULL, ghostty_ptr, ghostty_len);
+    }
   }
 
   bridge->formatter_free(formatter);

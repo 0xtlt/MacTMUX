@@ -1,4 +1,5 @@
 import AppKit
+import MacTMUXGhosttyBridge
 @testable import MacTMUXApp
 import XCTest
 
@@ -198,6 +199,64 @@ final class TerminalEmulatorBridgeTests: XCTestCase {
         XCTAssertTrue(output.contains("new"))
         XCTAssertFalse(output.contains("previous-long-value"))
         XCTAssertFalse(output.contains("unchanged old line"))
+    }
+
+    func testVendoredLibGhosttyPlainRenderOfEmptyTerminalSucceedsWithZeroBytes() throws {
+        let terminal = try makeNativeTerminal()
+        defer {
+            MCTGhosttyVTTerminalFree(terminal.terminal)
+            MCTGhosttyVTBridgeFree(terminal.bridge)
+        }
+
+        let output = try XCTUnwrap(plainRender(terminal.terminal, Data()))
+
+        XCTAssertEqual(output, "")
+    }
+
+    func testVendoredLibGhosttyPlainRenderOfClearedTerminalSucceedsWithZeroBytes() throws {
+        let terminal = try makeNativeTerminal()
+        defer {
+            MCTGhosttyVTTerminalFree(terminal.terminal)
+            MCTGhosttyVTBridgeFree(terminal.bridge)
+        }
+
+        XCTAssertEqual(try XCTUnwrap(plainRender(terminal.terminal, Data("hello".utf8))), "hello")
+        let cleared = try XCTUnwrap(plainRender(terminal.terminal, Data("\u{1B}[H\u{1B}[2J".utf8)))
+
+        XCTAssertEqual(cleared, "")
+    }
+
+    private func makeNativeTerminal() throws -> (bridge: OpaquePointer, terminal: OpaquePointer) {
+        let libraryPath = Self.vendoredLibraryPath
+        guard FileManager.default.fileExists(atPath: libraryPath) else {
+            throw XCTSkip("Vendored libghostty-vt dylib is not available.")
+        }
+        let bridge = try XCTUnwrap(libraryPath.withCString { MCTGhosttyVTBridgeCreate($0) })
+        guard let terminal = MCTGhosttyVTTerminalCreate(bridge, 80, 20) else {
+            MCTGhosttyVTBridgeFree(bridge)
+            throw XCTSkip("Could not create libghostty-vt terminal.")
+        }
+        return (bridge, terminal)
+    }
+
+    /// Returns nil when the C bridge reports failure; otherwise the (possibly empty) rendered text.
+    private func plainRender(_ terminal: OpaquePointer, _ data: Data) -> String? {
+        var pointer: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        let ok = data.withUnsafeBytes { bytes in
+            MCTGhosttyVTTerminalRender(
+                terminal,
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                data.count,
+                &pointer,
+                &length
+            )
+        }
+        guard ok, let pointer else {
+            return nil
+        }
+        defer { MCTGhosttyVTBufferFree(pointer) }
+        return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
     }
 
     func testVendoredLibGhosttyDoesNotExposeScrollbackAsCurrentScreen() throws {
