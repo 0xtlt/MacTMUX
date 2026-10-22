@@ -20,6 +20,10 @@ typedef enum {
 } GhosttyPointTag;
 
 typedef enum {
+  GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES = 27,
+} GhosttyTerminalOption;
+
+typedef enum {
   GHOSTTY_SCROLL_VIEWPORT_TOP = 0,
   GHOSTTY_SCROLL_VIEWPORT_BOTTOM = 1,
   GHOSTTY_SCROLL_VIEWPORT_DELTA = 2,
@@ -36,12 +40,6 @@ typedef struct GhosttyFormatterImpl *GhosttyFormatter;
 typedef struct GhosttyAllocator GhosttyAllocator;
 typedef struct GhosttySelection GhosttySelection;
 typedef struct GhosttyGridRef GhosttyGridRef;
-
-typedef struct {
-  uint16_t cols;
-  uint16_t rows;
-  size_t max_scrollback;
-} GhosttyTerminalOptions;
 
 typedef struct {
   size_t size;
@@ -123,7 +121,11 @@ typedef struct {
 typedef GhosttyResult (*GhosttyBuildInfoFn)(GhosttyBuildInfo data, void *out);
 typedef GhosttyResult (*GhosttyTerminalNewFn)(const GhosttyAllocator *allocator,
                                               GhosttyTerminal *terminal,
-                                              GhosttyTerminalOptions options);
+                                              uint16_t cols,
+                                              uint16_t rows);
+typedef GhosttyResult (*GhosttyTerminalSetFn)(GhosttyTerminal terminal,
+                                              GhosttyTerminalOption option,
+                                              const void *value);
 typedef void (*GhosttyTerminalFreeFn)(GhosttyTerminal terminal);
 typedef GhosttyResult (*GhosttyTerminalResizeFn)(GhosttyTerminal terminal,
                                                  uint16_t cols,
@@ -160,6 +162,7 @@ struct MCTGhosttyVTBridge {
   void *handle;
   GhosttyBuildInfoFn build_info;
   GhosttyTerminalNewFn terminal_new;
+  GhosttyTerminalSetFn terminal_set;
   GhosttyTerminalFreeFn terminal_free;
   GhosttyTerminalResizeFn terminal_resize;
   GhosttyTerminalVTWriteFn terminal_vt_write;
@@ -202,6 +205,7 @@ MCTGhosttyVTBridge *MCTGhosttyVTBridgeCreate(const char *path) {
   bridge->handle = handle;
   bridge->build_info = (GhosttyBuildInfoFn)mct_symbol(handle, "ghostty_build_info");
   bridge->terminal_new = (GhosttyTerminalNewFn)mct_symbol(handle, "ghostty_terminal_new");
+  bridge->terminal_set = (GhosttyTerminalSetFn)mct_symbol(handle, "ghostty_terminal_set");
   bridge->terminal_free = (GhosttyTerminalFreeFn)mct_symbol(handle, "ghostty_terminal_free");
   bridge->terminal_resize = (GhosttyTerminalResizeFn)mct_symbol(handle, "ghostty_terminal_resize");
   bridge->terminal_vt_write = (GhosttyTerminalVTWriteFn)mct_symbol(handle, "ghostty_terminal_vt_write");
@@ -215,6 +219,7 @@ MCTGhosttyVTBridge *MCTGhosttyVTBridgeCreate(const char *path) {
 
   if (bridge->build_info == NULL ||
       bridge->terminal_new == NULL ||
+      bridge->terminal_set == NULL ||
       bridge->terminal_free == NULL ||
       bridge->terminal_resize == NULL ||
       bridge->terminal_vt_write == NULL ||
@@ -259,17 +264,26 @@ MCTGhosttyVTBuildInfo MCTGhosttyVTBridgeBuildInfo(MCTGhosttyVTBridge *bridge) {
 MCTGhosttyVTTerminal *MCTGhosttyVTTerminalCreate(MCTGhosttyVTBridge *bridge,
                                                  uint16_t cols,
                                                  uint16_t rows) {
-  if (bridge == NULL || bridge->terminal_new == NULL) {
+  if (bridge == NULL || bridge->terminal_new == NULL || bridge->terminal_set == NULL) {
     return NULL;
   }
 
   GhosttyTerminal terminal = NULL;
-  GhosttyTerminalOptions options = {
-    .cols = cols == 0 ? 1 : cols,
-    .rows = rows == 0 ? 1 : rows,
-    .max_scrollback = 0,
-  };
-  if (bridge->terminal_new(NULL, &terminal, options) != GHOSTTY_SUCCESS || terminal == NULL) {
+  uint16_t initial_cols = cols == 0 ? 1 : cols;
+  uint16_t initial_rows = rows == 0 ? 1 : rows;
+  if (bridge->terminal_new(NULL, &terminal, initial_cols, initial_rows) != GHOSTTY_SUCCESS ||
+      terminal == NULL) {
+    return NULL;
+  }
+
+  // Scrollback is now configured after creation (it used to be the
+  // `max_scrollback` creation option). Keep the previous behavior: 0 bytes
+  // disables scrollback, instead of Ghostty's new non-zero default.
+  size_t max_scrollback_bytes = 0;
+  if (bridge->terminal_set(terminal,
+                           GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                           &max_scrollback_bytes) != GHOSTTY_SUCCESS) {
+    bridge->terminal_free(terminal);
     return NULL;
   }
 
@@ -281,8 +295,8 @@ MCTGhosttyVTTerminal *MCTGhosttyVTTerminalCreate(MCTGhosttyVTBridge *bridge,
 
   wrapper->bridge = bridge;
   wrapper->terminal = terminal;
-  wrapper->cols = options.cols;
-  wrapper->rows = options.rows;
+  wrapper->cols = initial_cols;
+  wrapper->rows = initial_rows;
   return wrapper;
 }
 
